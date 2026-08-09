@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+import cartography.intel.azure.ai_foundry
 import cartography.intel.azure.compute
 import cartography.intel.azure.functions
 import cartography.intel.azure.rbac
@@ -46,6 +47,11 @@ FUNCTION_APP_ID = (
     "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/"
     "TestRG/providers/Microsoft.Web/sites/TestFunc"
 )
+FOUNDRY_ACCOUNT_ID = (
+    "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/"
+    "TestRG/providers/Microsoft.CognitiveServices/accounts/TestFoundry"
+)
+FOUNDRY_PROJECT_ID = f"{FOUNDRY_ACCOUNT_ID}/projects/TestProject"
 
 
 async def _async_gen(items: list[Any]) -> AsyncGenerator[Any, None]:
@@ -126,6 +132,32 @@ async def test_sync_workload_identity_edges(
         TEST_SUBSCRIPTION_ID,
         TEST_UPDATE_TAG,
     )
+    # An AI Foundry account and project whose managed identity is sp-101.
+    cartography.intel.azure.ai_foundry.load_ai_foundry_accounts(
+        neo4j_session,
+        [
+            {
+                "id": FOUNDRY_ACCOUNT_ID,
+                "name": "TestFoundry",
+                "identity_principal_ids": [MANAGED_IDENTITY_PRINCIPAL_ID],
+            }
+        ],
+        TEST_SUBSCRIPTION_ID,
+        TEST_UPDATE_TAG,
+    )
+    cartography.intel.azure.ai_foundry.load_ai_foundry_projects(
+        neo4j_session,
+        [
+            {
+                "id": FOUNDRY_PROJECT_ID,
+                "name": "TestProject",
+                "account_id": FOUNDRY_ACCOUNT_ID,
+                "identity_principal_ids": [MANAGED_IDENTITY_PRINCIPAL_ID],
+            }
+        ],
+        TEST_SUBSCRIPTION_ID,
+        TEST_UPDATE_TAG,
+    )
 
     # Act
     cartography.intel.azure.workload_identity.sync(
@@ -153,6 +185,24 @@ async def test_sync_workload_identity_edges(
         "RUNS_AS",
         rel_direction_right=True,
     ) == {(FUNCTION_APP_ID, MANAGED_IDENTITY_PRINCIPAL_ID)}
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryAccount",
+        "id",
+        "EntraServicePrincipal",
+        "id",
+        "RUNS_AS",
+        rel_direction_right=True,
+    ) == {(FOUNDRY_ACCOUNT_ID, MANAGED_IDENTITY_PRINCIPAL_ID)}
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryProject",
+        "id",
+        "EntraServicePrincipal",
+        "id",
+        "RUNS_AS",
+        rel_direction_right=True,
+    ) == {(FOUNDRY_PROJECT_ID, MANAGED_IDENTITY_PRINCIPAL_ID)}
 
     # Assert ASSUMES -> AzureRoleDefinition (assembled from the role assignment).
     assert check_rels(
@@ -173,3 +223,21 @@ async def test_sync_workload_identity_edges(
         "ASSUMES",
         rel_direction_right=True,
     ) == {(FUNCTION_APP_ID, READER_ROLE_DEFINITION_ID)}
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryAccount",
+        "id",
+        "AzureRoleDefinition",
+        "id",
+        "ASSUMES",
+        rel_direction_right=True,
+    ) == {(FOUNDRY_ACCOUNT_ID, READER_ROLE_DEFINITION_ID)}
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryProject",
+        "id",
+        "AzureRoleDefinition",
+        "id",
+        "ASSUMES",
+        rel_direction_right=True,
+    ) == {(FOUNDRY_PROJECT_ID, READER_ROLE_DEFINITION_ID)}

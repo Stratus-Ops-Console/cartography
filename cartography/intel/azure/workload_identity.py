@@ -4,6 +4,12 @@ import neo4j
 
 from cartography.client.core.tx import load_matchlinks
 from cartography.graph.job import GraphJob
+from cartography.models.azure.ai_foundry.account import (
+    AzureAIFoundryAccountToRoleAssumesMatchLink,
+)
+from cartography.models.azure.ai_foundry.project import (
+    AzureAIFoundryProjectToRoleAssumesMatchLink,
+)
 from cartography.models.azure.function_app import AzureFunctionAppToRoleAssumesMatchLink
 from cartography.models.azure.vm.virtualmachine import (
     AzureVirtualMachineToRoleAssumesMatchLink,
@@ -67,9 +73,11 @@ def sync(
     update_tag: int,
 ) -> None:
     """
-    Materialize the canonical (:AzureVirtualMachine|:AzureFunctionApp)
-    -[:ASSUMES]->(:AzureRoleDefinition) edges from managed-identity role
-    assignments. Must run after both the compute/functions and RBAC syncs.
+    Materialize the canonical (:AzureVirtualMachine|:AzureFunctionApp|
+    :AzureAIFoundryAccount|:AzureAIFoundryProject)-[:ASSUMES]->
+    (:AzureRoleDefinition) edges from managed-identity role assignments. Must
+    run after the workload syncs that stamp identity_principal_ids
+    (compute/functions/ai_foundry) and the RBAC sync.
     """
     logger.info(
         "Syncing Azure workload-identity ASSUMES edges for subscription '%s'.",
@@ -88,4 +96,18 @@ def sync(
         update_tag,
         "AzureFunctionApp",
         AzureFunctionAppToRoleAssumesMatchLink(),
+    )
+    _sync_assumes_for_label(
+        neo4j_session,
+        subscription_id,
+        update_tag,
+        "AzureAIFoundryAccount",
+        AzureAIFoundryAccountToRoleAssumesMatchLink(),
+    )
+    _sync_assumes_for_label(
+        neo4j_session,
+        subscription_id,
+        update_tag,
+        "AzureAIFoundryProject",
+        AzureAIFoundryProjectToRoleAssumesMatchLink(),
     )

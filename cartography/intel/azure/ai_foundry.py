@@ -2,6 +2,7 @@ import logging
 from typing import Any
 
 import neo4j
+from azure.ai.projects import AIProjectClient
 from azure.core.exceptions import ClientAuthenticationError
 from azure.core.exceptions import HttpResponseError
 from azure.mgmt.cognitiveservices import CognitiveServicesManagementClient
@@ -11,6 +12,7 @@ from cartography.graph.job import GraphJob
 from cartography.intel.azure.util.common import extract_identity_principal_ids
 from cartography.intel.azure.util.common import get_resource_group_from_id
 from cartography.models.azure.ai_foundry.account import AzureAIFoundryAccountSchema
+from cartography.models.azure.ai_foundry.agent import AzureAIFoundryAgentSchema
 from cartography.models.azure.ai_foundry.connection import (
     AzureAIFoundryConnectionSchema,
 )
@@ -29,6 +31,10 @@ logger = logging.getLogger(__name__)
 # (standalone Azure OpenAI). Other kinds (Face, SpeechServices, ...) are
 # single-purpose cognitive services and are out of scope for this module.
 AI_FOUNDRY_ACCOUNT_KINDS = frozenset({"AIServices", "OpenAI"})
+
+# Key under ProjectProperties.endpoints holding the project's data-plane
+# endpoint, used for the (optional) Foundry Agent Service listing.
+AI_FOUNDRY_API_ENDPOINT_KEY = "AI Foundry API"
 
 
 @timeit
@@ -122,6 +128,28 @@ def get_ai_foundry_project_connections(
         logger.warning(
             f"Failed to get connections for project {project_name} "
             f"of account {account_name}: {str(e)}"
+        )
+        return []
+
+
+@timeit
+def get_ai_foundry_agents(
+    credential: Any, project_endpoint: str, project_name: str
+) -> list[dict]:
+    """
+    Data-plane call (Foundry Agent Service). Unlike the ARM calls above it
+    needs a data-plane RBAC role (e.g. Azure AI User) on the project; without
+    it we log and continue so the control-plane graph still syncs.
+    """
+    try:
+        with AIProjectClient(
+            endpoint=project_endpoint, credential=credential
+        ) as project_client:
+            return [agent.as_dict() for agent in project_client.agents.list()]
+    except (ClientAuthenticationError, HttpResponseError) as e:
+        logger.warning(
+            f"Failed to list Foundry agents for project {project_name} "
+            f"(missing data-plane RBAC on the project?): {str(e)}"
         )
         return []
 
@@ -233,6 +261,49 @@ def transform_ai_foundry_connections(
 
 
 @timeit
+def transform_ai_foundry_agents(
+    agents: list[dict], project_id: str, account_id: str
+) -> list[dict]:
+    # azure-ai-projects models serialize to the camelCase wire format.
+    transformed_agents: list[dict[str, Any]] = []
+    for agent in agents:
+        latest = (agent.get("versions") or {}).get("latest") or {}
+        definition = latest.get("definition") or {}
+        instance_identity = agent.get("instanceIdentity") or {}
+        principal_id = instance_identity.get("principalId")
+        model = definition.get("model")
+        transformed_agents.append(
+            {
+                # Agents are data-plane objects with no ARM id; synthesize a
+                # globally unique one under the project.
+                "id": f"{project_id}/agents/{agent['name']}",
+                "agent_guid": agent.get("id"),
+                "name": agent["name"],
+                "state": agent.get("state"),
+                "description": latest.get("description"),
+                "kind": definition.get("kind"),
+                "model": model,
+                "instructions": definition.get("instructions"),
+                "tool_types": [
+                    tool["type"]
+                    for tool in definition.get("tools") or []
+                    if isinstance(tool, dict) and tool.get("type")
+                ],
+                "version": latest.get("version"),
+                "created_at": latest.get("createdAt"),
+                "identity_principal_ids": [principal_id] if principal_id else [],
+                "project_id": project_id,
+                # Deployments are named per account, so the deployment the
+                # agent calls has a deterministic ARM id (USES_MODEL target).
+                "model_deployment_id": (
+                    f"{account_id}/deployments/{model}" if model else None
+                ),
+            }
+        )
+    return transformed_agents
+
+
+@timeit
 def load_ai_foundry_accounts(
     neo4j_session: neo4j.Session,
     data: list[dict[str, Any]],
@@ -297,9 +368,28 @@ def load_ai_foundry_connections(
 
 
 @timeit
+def load_ai_foundry_agents(
+    neo4j_session: neo4j.Session,
+    data: list[dict[str, Any]],
+    subscription_id: str,
+    update_tag: int,
+) -> None:
+    load(
+        neo4j_session,
+        AzureAIFoundryAgentSchema(),
+        data,
+        lastupdated=update_tag,
+        AZURE_SUBSCRIPTION_ID=subscription_id,
+    )
+
+
+@timeit
 def cleanup(neo4j_session: neo4j.Session, common_job_parameters: dict) -> None:
-    # Children first so stale HAS_PROJECT / HAS_DEPLOYMENT / HAS_CONNECTION
-    # edges never dangle.
+    # Children first so stale HAS_PROJECT / HAS_DEPLOYMENT / HAS_CONNECTION /
+    # HAS_AGENT edges never dangle.
+    GraphJob.from_node_schema(AzureAIFoundryAgentSchema(), common_job_parameters).run(
+        neo4j_session
+    )
     GraphJob.from_node_schema(
         AzureAIFoundryConnectionSchema(), common_job_parameters
     ).run(neo4j_session)
@@ -336,6 +426,7 @@ def sync(
     all_projects: list[dict[str, Any]] = []
     all_deployments: list[dict[str, Any]] = []
     all_connections: list[dict[str, Any]] = []
+    all_agents: list[dict[str, Any]] = []
     for account in accounts:
         account_id = account["id"]
         account_name = account["name"]
@@ -359,6 +450,22 @@ def sync(
                         project_id=project["id"],
                     )
                 )
+                project_endpoint = (
+                    (project.get("properties") or {}).get("endpoints") or {}
+                ).get(AI_FOUNDRY_API_ENDPOINT_KEY)
+                if project_endpoint:
+                    agents = get_ai_foundry_agents(
+                        credentials.credential, project_endpoint, project["name"]
+                    )
+                    all_agents.extend(
+                        transform_ai_foundry_agents(agents, project["id"], account_id)
+                    )
+                else:
+                    logger.debug(
+                        "Project %s exposes no AI Foundry API endpoint; "
+                        "skipping agent listing.",
+                        project["name"],
+                    )
         deployments = get_ai_foundry_deployments(
             client, resource_group_name, account_name
         )
@@ -379,5 +486,6 @@ def sync(
     load_ai_foundry_connections(
         neo4j_session, all_connections, subscription_id, update_tag
     )
+    load_ai_foundry_agents(neo4j_session, all_agents, subscription_id, update_tag)
 
     cleanup(neo4j_session, common_job_parameters)

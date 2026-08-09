@@ -53,6 +53,7 @@ FOUNDRY_ACCOUNT_ID = (
     "TestRG/providers/Microsoft.CognitiveServices/accounts/TestFoundry"
 )
 FOUNDRY_PROJECT_ID = f"{FOUNDRY_ACCOUNT_ID}/projects/TestProject"
+FOUNDRY_AGENT_ID = f"{FOUNDRY_PROJECT_ID}/agents/TestAgent"
 CONTAINER_APP_ID = (
     "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/"
     "TestRG/providers/Microsoft.App/containerApps/TestApp"
@@ -163,6 +164,20 @@ async def test_sync_workload_identity_edges(
         TEST_SUBSCRIPTION_ID,
         TEST_UPDATE_TAG,
     )
+    # An AI Foundry agent whose instance identity is sp-101.
+    cartography.intel.azure.ai_foundry.load_ai_foundry_agents(
+        neo4j_session,
+        [
+            {
+                "id": FOUNDRY_AGENT_ID,
+                "name": "TestAgent",
+                "project_id": FOUNDRY_PROJECT_ID,
+                "identity_principal_ids": [MANAGED_IDENTITY_PRINCIPAL_ID],
+            }
+        ],
+        TEST_SUBSCRIPTION_ID,
+        TEST_UPDATE_TAG,
+    )
     # A container app whose managed identity is sp-101.
     cartography.intel.azure.container_apps.load_container_apps(
         neo4j_session,
@@ -230,6 +245,15 @@ async def test_sync_workload_identity_edges(
         "RUNS_AS",
         rel_direction_right=True,
     ) == {(CONTAINER_APP_ID, MANAGED_IDENTITY_PRINCIPAL_ID)}
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryAgent",
+        "id",
+        "EntraServicePrincipal",
+        "id",
+        "RUNS_AS",
+        rel_direction_right=True,
+    ) == {(FOUNDRY_AGENT_ID, MANAGED_IDENTITY_PRINCIPAL_ID)}
 
     # Assert ASSUMES -> AzureRoleDefinition (assembled from the role assignment).
     assert check_rels(
@@ -277,3 +301,12 @@ async def test_sync_workload_identity_edges(
         "ASSUMES",
         rel_direction_right=True,
     ) == {(CONTAINER_APP_ID, READER_ROLE_DEFINITION_ID)}
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryAgent",
+        "id",
+        "AzureRoleDefinition",
+        "id",
+        "ASSUMES",
+        rel_direction_right=True,
+    ) == {(FOUNDRY_AGENT_ID, READER_ROLE_DEFINITION_ID)}

@@ -120,6 +120,7 @@ dependencies = [
     "modal>=1.5.3,<2",
     "azure-mgmt-cognitiveservices>=13.7.0",
     "azure-mgmt-appcontainers>=3.0.0",
+    "azure-ai-projects>=1.0.0",
 ]
 # Comes from Git tag
 dynamic = [ "version" ]

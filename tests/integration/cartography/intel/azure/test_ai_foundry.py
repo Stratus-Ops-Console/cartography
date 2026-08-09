@@ -12,12 +12,15 @@ from tests.data.azure.ai_foundry import KEY_VAULT_RESOURCE_ID
 from tests.data.azure.ai_foundry import KV_CONNECTION_ID
 from tests.data.azure.ai_foundry import MOCK_ACCOUNT_CONNECTIONS
 from tests.data.azure.ai_foundry import MOCK_ACCOUNTS
+from tests.data.azure.ai_foundry import MOCK_AGENTS
 from tests.data.azure.ai_foundry import MOCK_FOUNDRY_DEPLOYMENTS
 from tests.data.azure.ai_foundry import MOCK_OPENAI_DEPLOYMENTS
 from tests.data.azure.ai_foundry import MOCK_PROJECT_CONNECTIONS
 from tests.data.azure.ai_foundry import MOCK_PROJECTS
 from tests.data.azure.ai_foundry import OPENAI_ACCOUNT_ID
 from tests.data.azure.ai_foundry import SEARCH_CONNECTION_ID
+from tests.data.azure.ai_foundry import SUPPORT_AGENT_ID
+from tests.data.azure.ai_foundry import TRIAGE_AGENT_ID
 from tests.integration.cartography.intel.azure.common import (
     create_test_azure_subscription,
 )
@@ -28,6 +31,7 @@ TEST_SUBSCRIPTION_ID = "00-00-00-00"
 TEST_UPDATE_TAG = 123456789
 
 
+@patch("cartography.intel.azure.ai_foundry.get_ai_foundry_agents")
 @patch("cartography.intel.azure.ai_foundry.get_ai_foundry_project_connections")
 @patch("cartography.intel.azure.ai_foundry.get_ai_foundry_account_connections")
 @patch("cartography.intel.azure.ai_foundry.get_ai_foundry_deployments")
@@ -39,11 +43,12 @@ def test_sync_ai_foundry(
     mock_get_deployments,
     mock_get_account_connections,
     mock_get_project_connections,
+    mock_get_agents,
     neo4j_session,
 ):
     """
-    Test that accounts, projects, model deployments and connections sync with
-    their containment relationships.
+    Test that accounts, projects, model deployments, connections and agents
+    sync with their containment relationships.
     """
     # Arrange
     mock_get_accounts.return_value = MOCK_ACCOUNTS
@@ -58,6 +63,9 @@ def test_sync_ai_foundry(
     # per project of the AIServices account.
     mock_get_account_connections.side_effect = [MOCK_ACCOUNT_CONNECTIONS, []]
     mock_get_project_connections.side_effect = [MOCK_PROJECT_CONNECTIONS, []]
+    # Agents are only listed for the project that exposes an AI Foundry API
+    # endpoint (the agents project); a second call would raise StopIteration.
+    mock_get_agents.side_effect = [MOCK_AGENTS]
     create_test_azure_subscription(neo4j_session, TEST_SUBSCRIPTION_ID, TEST_UPDATE_TAG)
     # A Key Vault ingested by the key vault sync, targeted by kv-agents.
     neo4j_session.run(
@@ -197,6 +205,42 @@ def test_sync_ai_foundry(
         "CONNECTS_TO",
         rel_direction_right=True,
     ) == {(KV_CONNECTION_ID, KEY_VAULT_RESOURCE_ID)}
+
+    # Assert agents: model, tool kinds and state surfaced from the latest
+    # version.
+    assert check_nodes(
+        neo4j_session,
+        "AzureAIFoundryAgent",
+        ["id", "state", "model"],
+    ) == {
+        (SUPPORT_AGENT_ID, "enabled", "gpt-4o"),
+        (TRIAGE_AGENT_ID, "disabled", "gpt-4o"),
+    }
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryProject",
+        "id",
+        "AzureAIFoundryAgent",
+        "id",
+        "HAS_AGENT",
+    ) == {
+        (AGENTS_PROJECT_ID, SUPPORT_AGENT_ID),
+        (AGENTS_PROJECT_ID, TRIAGE_AGENT_ID),
+    }
+    # Agents link to the deployment they call via the account-scoped
+    # deployment id.
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryAgent",
+        "id",
+        "AzureAIFoundryDeployment",
+        "id",
+        "USES_MODEL",
+        rel_direction_right=True,
+    ) == {
+        (SUPPORT_AGENT_ID, GPT4O_DEPLOYMENT_ID),
+        (TRIAGE_AGENT_ID, GPT4O_DEPLOYMENT_ID),
+    }
 
     # Assert containment: account -> projects, account -> deployments.
     assert check_rels(

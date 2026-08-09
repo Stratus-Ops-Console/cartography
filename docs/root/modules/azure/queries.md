@@ -66,3 +66,14 @@ WHERE app.ingress_external = true
   AND (env.internal_load_balancer IS NULL OR env.internal_load_balancer = false)
 RETURN app.name, app.fqdn, app.target_port, app.allow_insecure
 ```
+
+## Find Static-Secret Connections Reachable from AI Foundry Projects
+
+```cypher
+MATCH (project:AzureAIFoundryProject)-[:HAS_CONNECTION]->
+      (conn:AzureAIFoundryConnection)
+WHERE conn.auth_type IN ["ApiKey", "AccountKey", "AccessKey", "SAS", "PAT",
+                         "CustomKeys", "UsernamePassword"]
+RETURN project.display_name, conn.name, conn.category, conn.auth_type,
+       conn.target
+```

@@ -94,3 +94,49 @@ def test_transform_ai_foundry_deployments_flattens_model_and_sku() -> None:
             "account_id": FOUNDRY_ACCOUNT_ID,
         },
     ]
+
+
+def test_transform_ai_foundry_connections_account_scope() -> None:
+    from tests.data.azure.ai_foundry import MOCK_ACCOUNT_CONNECTIONS
+    from tests.data.azure.ai_foundry import SEARCH_CONNECTION_ID
+
+    data = ai_foundry.transform_ai_foundry_connections(
+        MOCK_ACCOUNT_CONNECTIONS, account_id=FOUNDRY_ACCOUNT_ID
+    )
+
+    assert data == [
+        {
+            "id": SEARCH_CONNECTION_ID,
+            "name": "search-shared",
+            "category": "CognitiveSearch",
+            "auth_type": "AAD",
+            "target": "https://estate-search.search.windows.net/",
+            "target_resource_id": (
+                "/subscriptions/00-00-00-00/resourceGroups/TestRG/providers/"
+                "Microsoft.Search/searchServices/estate-search"
+            ),
+            "is_shared_to_all": True,
+            "scope": "account",
+            "account_id": FOUNDRY_ACCOUNT_ID,
+            "project_id": None,
+        },
+    ]
+
+
+def test_transform_ai_foundry_connections_project_scope() -> None:
+    from tests.data.azure.ai_foundry import AGENTS_PROJECT_ID
+    from tests.data.azure.ai_foundry import KEY_VAULT_RESOURCE_ID
+    from tests.data.azure.ai_foundry import MOCK_PROJECT_CONNECTIONS
+
+    data = ai_foundry.transform_ai_foundry_connections(
+        MOCK_PROJECT_CONNECTIONS, project_id=AGENTS_PROJECT_ID
+    )
+
+    assert [c["scope"] for c in data] == ["project", "project"]
+    assert [c["account_id"] for c in data] == [None, None]
+    assert [c["project_id"] for c in data] == [AGENTS_PROJECT_ID] * 2
+    # Lowercase resourceId metadata spelling still resolves the ARM id.
+    assert data[0]["target_resource_id"] == KEY_VAULT_RESOURCE_ID
+    # No metadata at all: no target resource id, auth type still surfaced.
+    assert data[1]["target_resource_id"] is None
+    assert data[1]["auth_type"] == "ApiKey"

@@ -117,3 +117,57 @@ MOCK_OPENAI_DEPLOYMENTS = [
         },
     },
 ]
+
+
+SEARCH_CONNECTION_ID = f"{FOUNDRY_ACCOUNT_ID}/connections/search-shared"
+KV_CONNECTION_ID = f"{AGENTS_PROJECT_ID}/connections/kv-agents"
+CUSTOM_CONNECTION_ID = f"{AGENTS_PROJECT_ID}/connections/crm-api"
+
+KEY_VAULT_RESOURCE_ID = (
+    "/subscriptions/00-00-00-00/resourceGroups/TestRG/providers/"
+    "Microsoft.KeyVault/vaults/agents-kv"
+)
+
+MOCK_ACCOUNT_CONNECTIONS = [
+    {
+        "id": SEARCH_CONNECTION_ID,
+        "name": "search-shared",
+        "properties": {
+            "auth_type": "AAD",
+            "category": "CognitiveSearch",
+            "target": "https://estate-search.search.windows.net/",
+            "is_shared_to_all": True,
+            "metadata": {
+                "ResourceId": (
+                    "/subscriptions/00-00-00-00/resourceGroups/TestRG/providers/"
+                    "Microsoft.Search/searchServices/estate-search"
+                ),
+            },
+        },
+    },
+]
+
+MOCK_PROJECT_CONNECTIONS = [
+    {
+        "id": KV_CONNECTION_ID,
+        "name": "kv-agents",
+        "properties": {
+            "auth_type": "ManagedIdentity",
+            "category": "AzureKeyVault",
+            "target": "https://agents-kv.vault.azure.net/",
+            # Lowercase metadata key spelling seen from some SDK writers.
+            "metadata": {"resourceId": KEY_VAULT_RESOURCE_ID},
+        },
+    },
+    {
+        # Static-secret connection to an arbitrary external API: the shape a
+        # key-auth governance query needs to surface.
+        "id": CUSTOM_CONNECTION_ID,
+        "name": "crm-api",
+        "properties": {
+            "auth_type": "ApiKey",
+            "category": "CustomKeys",
+            "target": "https://crm.example.com/api",
+        },
+    },
+]

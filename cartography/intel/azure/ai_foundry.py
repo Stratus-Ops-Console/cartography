@@ -11,6 +11,9 @@ from cartography.graph.job import GraphJob
 from cartography.intel.azure.util.common import extract_identity_principal_ids
 from cartography.intel.azure.util.common import get_resource_group_from_id
 from cartography.models.azure.ai_foundry.account import AzureAIFoundryAccountSchema
+from cartography.models.azure.ai_foundry.connection import (
+    AzureAIFoundryConnectionSchema,
+)
 from cartography.models.azure.ai_foundry.deployment import (
     AzureAIFoundryDeploymentSchema,
 )
@@ -77,6 +80,48 @@ def get_ai_foundry_deployments(
     except (ClientAuthenticationError, HttpResponseError) as e:
         logger.warning(
             f"Failed to get model deployments for account {account_name}: {str(e)}"
+        )
+        return []
+
+
+@timeit
+def get_ai_foundry_account_connections(
+    client: CognitiveServicesManagementClient,
+    resource_group_name: str,
+    account_name: str,
+) -> list[dict]:
+    try:
+        return [
+            connection.as_dict()
+            for connection in client.account_connections.list(
+                resource_group_name, account_name
+            )
+        ]
+    except (ClientAuthenticationError, HttpResponseError) as e:
+        logger.warning(
+            f"Failed to get connections for account {account_name}: {str(e)}"
+        )
+        return []
+
+
+@timeit
+def get_ai_foundry_project_connections(
+    client: CognitiveServicesManagementClient,
+    resource_group_name: str,
+    account_name: str,
+    project_name: str,
+) -> list[dict]:
+    try:
+        return [
+            connection.as_dict()
+            for connection in client.project_connections.list(
+                resource_group_name, account_name, project_name
+            )
+        ]
+    except (ClientAuthenticationError, HttpResponseError) as e:
+        logger.warning(
+            f"Failed to get connections for project {project_name} "
+            f"of account {account_name}: {str(e)}"
         )
         return []
 
@@ -158,6 +203,36 @@ def transform_ai_foundry_deployments(
 
 
 @timeit
+def transform_ai_foundry_connections(
+    connections: list[dict],
+    account_id: str | None = None,
+    project_id: str | None = None,
+) -> list[dict]:
+    transformed_connections: list[dict[str, Any]] = []
+    for connection in connections:
+        properties = connection.get("properties", {}) or {}
+        metadata = properties.get("metadata") or {}
+        transformed_connections.append(
+            {
+                "id": connection["id"],
+                "name": connection["name"],
+                "category": properties.get("category"),
+                "auth_type": properties.get("auth_type"),
+                "target": properties.get("target"),
+                # Azure-resource-backed connections carry the target's ARM id
+                # in metadata; portal and SDK writers vary the key's casing.
+                "target_resource_id": metadata.get("ResourceId")
+                or metadata.get("resourceId"),
+                "is_shared_to_all": properties.get("is_shared_to_all"),
+                "scope": "project" if project_id else "account",
+                "account_id": account_id,
+                "project_id": project_id,
+            }
+        )
+    return transformed_connections
+
+
+@timeit
 def load_ai_foundry_accounts(
     neo4j_session: neo4j.Session,
     data: list[dict[str, Any]],
@@ -206,8 +281,28 @@ def load_ai_foundry_deployments(
 
 
 @timeit
+def load_ai_foundry_connections(
+    neo4j_session: neo4j.Session,
+    data: list[dict[str, Any]],
+    subscription_id: str,
+    update_tag: int,
+) -> None:
+    load(
+        neo4j_session,
+        AzureAIFoundryConnectionSchema(),
+        data,
+        lastupdated=update_tag,
+        AZURE_SUBSCRIPTION_ID=subscription_id,
+    )
+
+
+@timeit
 def cleanup(neo4j_session: neo4j.Session, common_job_parameters: dict) -> None:
-    # Children first so stale HAS_PROJECT / HAS_DEPLOYMENT edges never dangle.
+    # Children first so stale HAS_PROJECT / HAS_DEPLOYMENT / HAS_CONNECTION
+    # edges never dangle.
+    GraphJob.from_node_schema(
+        AzureAIFoundryConnectionSchema(), common_job_parameters
+    ).run(neo4j_session)
     GraphJob.from_node_schema(
         AzureAIFoundryDeploymentSchema(), common_job_parameters
     ).run(neo4j_session)
@@ -240,6 +335,7 @@ def sync(
 
     all_projects: list[dict[str, Any]] = []
     all_deployments: list[dict[str, Any]] = []
+    all_connections: list[dict[str, Any]] = []
     for account in accounts:
         account_id = account["id"]
         account_name = account["name"]
@@ -251,16 +347,37 @@ def sync(
                 client, resource_group_name, account_name
             )
             all_projects.extend(transform_ai_foundry_projects(projects, account_id))
+            for project in projects:
+                project_connections = get_ai_foundry_project_connections(
+                    client, resource_group_name, account_name, project["name"]
+                )
+                # Project-scoped connections hang off the project only; the
+                # account is reachable through HAS_PROJECT.
+                all_connections.extend(
+                    transform_ai_foundry_connections(
+                        project_connections,
+                        project_id=project["id"],
+                    )
+                )
         deployments = get_ai_foundry_deployments(
             client, resource_group_name, account_name
         )
         all_deployments.extend(
             transform_ai_foundry_deployments(deployments, account_id)
         )
+        account_connections = get_ai_foundry_account_connections(
+            client, resource_group_name, account_name
+        )
+        all_connections.extend(
+            transform_ai_foundry_connections(account_connections, account_id=account_id)
+        )
 
     load_ai_foundry_projects(neo4j_session, all_projects, subscription_id, update_tag)
     load_ai_foundry_deployments(
         neo4j_session, all_deployments, subscription_id, update_tag
+    )
+    load_ai_foundry_connections(
+        neo4j_session, all_connections, subscription_id, update_tag
     )
 
     cleanup(neo4j_session, common_job_parameters)

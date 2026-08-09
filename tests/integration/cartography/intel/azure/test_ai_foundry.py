@@ -3,15 +3,21 @@ from unittest.mock import patch
 
 import cartography.intel.azure.ai_foundry as ai_foundry
 from tests.data.azure.ai_foundry import AGENTS_PROJECT_ID
+from tests.data.azure.ai_foundry import CUSTOM_CONNECTION_ID
 from tests.data.azure.ai_foundry import EMBEDDING_DEPLOYMENT_ID
 from tests.data.azure.ai_foundry import EVALS_PROJECT_ID
 from tests.data.azure.ai_foundry import FOUNDRY_ACCOUNT_ID
 from tests.data.azure.ai_foundry import GPT4O_DEPLOYMENT_ID
+from tests.data.azure.ai_foundry import KEY_VAULT_RESOURCE_ID
+from tests.data.azure.ai_foundry import KV_CONNECTION_ID
+from tests.data.azure.ai_foundry import MOCK_ACCOUNT_CONNECTIONS
 from tests.data.azure.ai_foundry import MOCK_ACCOUNTS
 from tests.data.azure.ai_foundry import MOCK_FOUNDRY_DEPLOYMENTS
 from tests.data.azure.ai_foundry import MOCK_OPENAI_DEPLOYMENTS
+from tests.data.azure.ai_foundry import MOCK_PROJECT_CONNECTIONS
 from tests.data.azure.ai_foundry import MOCK_PROJECTS
 from tests.data.azure.ai_foundry import OPENAI_ACCOUNT_ID
+from tests.data.azure.ai_foundry import SEARCH_CONNECTION_ID
 from tests.integration.cartography.intel.azure.common import (
     create_test_azure_subscription,
 )
@@ -22,15 +28,22 @@ TEST_SUBSCRIPTION_ID = "00-00-00-00"
 TEST_UPDATE_TAG = 123456789
 
 
+@patch("cartography.intel.azure.ai_foundry.get_ai_foundry_project_connections")
+@patch("cartography.intel.azure.ai_foundry.get_ai_foundry_account_connections")
 @patch("cartography.intel.azure.ai_foundry.get_ai_foundry_deployments")
 @patch("cartography.intel.azure.ai_foundry.get_ai_foundry_projects")
 @patch("cartography.intel.azure.ai_foundry.get_ai_foundry_accounts")
 def test_sync_ai_foundry(
-    mock_get_accounts, mock_get_projects, mock_get_deployments, neo4j_session
+    mock_get_accounts,
+    mock_get_projects,
+    mock_get_deployments,
+    mock_get_account_connections,
+    mock_get_project_connections,
+    neo4j_session,
 ):
     """
-    Test that accounts, projects and model deployments sync with their
-    containment relationships.
+    Test that accounts, projects, model deployments and connections sync with
+    their containment relationships.
     """
     # Arrange
     mock_get_accounts.return_value = MOCK_ACCOUNTS
@@ -41,7 +54,17 @@ def test_sync_ai_foundry(
         MOCK_FOUNDRY_DEPLOYMENTS,
         MOCK_OPENAI_DEPLOYMENTS,
     ]
+    # One account-connections call per account; one project-connections call
+    # per project of the AIServices account.
+    mock_get_account_connections.side_effect = [MOCK_ACCOUNT_CONNECTIONS, []]
+    mock_get_project_connections.side_effect = [MOCK_PROJECT_CONNECTIONS, []]
     create_test_azure_subscription(neo4j_session, TEST_SUBSCRIPTION_ID, TEST_UPDATE_TAG)
+    # A Key Vault ingested by the key vault sync, targeted by kv-agents.
+    neo4j_session.run(
+        "MERGE (kv:AzureKeyVault{id: $kv_id}) SET kv.lastupdated = $update_tag",
+        kv_id=KEY_VAULT_RESOURCE_ID,
+        update_tag=TEST_UPDATE_TAG,
+    )
     common_job_parameters = {
         "UPDATE_TAG": TEST_UPDATE_TAG,
         "AZURE_SUBSCRIPTION_ID": TEST_SUBSCRIPTION_ID,
@@ -129,6 +152,51 @@ def test_sync_ai_foundry(
         (TEST_SUBSCRIPTION_ID, GPT4O_DEPLOYMENT_ID),
         (TEST_SUBSCRIPTION_ID, EMBEDDING_DEPLOYMENT_ID),
     }
+
+    # Assert connections, including auth posture and scope.
+    assert check_nodes(
+        neo4j_session,
+        "AzureAIFoundryConnection",
+        ["id", "auth_type", "scope"],
+    ) == {
+        (SEARCH_CONNECTION_ID, "AAD", "account"),
+        (KV_CONNECTION_ID, "ManagedIdentity", "project"),
+        (CUSTOM_CONNECTION_ID, "ApiKey", "project"),
+    }
+
+    # Account-scoped connection hangs off the account; project-scoped off the
+    # project only.
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryAccount",
+        "id",
+        "AzureAIFoundryConnection",
+        "id",
+        "HAS_CONNECTION",
+    ) == {(FOUNDRY_ACCOUNT_ID, SEARCH_CONNECTION_ID)}
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryProject",
+        "id",
+        "AzureAIFoundryConnection",
+        "id",
+        "HAS_CONNECTION",
+    ) == {
+        (AGENTS_PROJECT_ID, KV_CONNECTION_ID),
+        (AGENTS_PROJECT_ID, CUSTOM_CONNECTION_ID),
+    }
+
+    # A resource-backed connection links to the target node the key vault
+    # sync ingested.
+    assert check_rels(
+        neo4j_session,
+        "AzureAIFoundryConnection",
+        "id",
+        "AzureKeyVault",
+        "id",
+        "CONNECTS_TO",
+        rel_direction_right=True,
+    ) == {(KV_CONNECTION_ID, KEY_VAULT_RESOURCE_ID)}
 
     # Assert containment: account -> projects, account -> deployments.
     assert check_rels(

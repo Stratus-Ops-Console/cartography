@@ -57,3 +57,12 @@ RETURN account.name, account.kind, account.endpoint,
 MATCH (project:AzureAIFoundryProject)-[:ASSUMES]->(role:AzureRoleDefinition)
 RETURN project.display_name, role.role_name
 ```
+
+## Find Publicly Reachable Container Apps
+
+```cypher
+MATCH (env:AzureContainerAppsEnvironment)-[:HAS_APP]->(app:AzureContainerApp)
+WHERE app.ingress_external = true
+  AND (env.internal_load_balancer IS NULL OR env.internal_load_balancer = false)
+RETURN app.name, app.fqdn, app.target_port, app.allow_insecure
+```

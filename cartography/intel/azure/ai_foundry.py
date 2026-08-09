@@ -72,9 +72,7 @@ def get_ai_foundry_deployments(
     try:
         return [
             deployment.as_dict()
-            for deployment in client.deployments.list(
-                resource_group_name, account_name
-            )
+            for deployment in client.deployments.list(resource_group_name, account_name)
         ]
     except (ClientAuthenticationError, HttpResponseError) as e:
         logger.warning(

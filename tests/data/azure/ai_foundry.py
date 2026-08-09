@@ -66,6 +66,11 @@ MOCK_PROJECTS = [
             "description": "Production agent workloads",
             "provisioning_state": "Succeeded",
             "is_default": True,
+            "endpoints": {
+                "AI Foundry API": (
+                    "https://foundry-prod.services.ai.azure.com/api/projects/agents"
+                ),
+            },
         },
     },
     {
@@ -168,6 +173,60 @@ MOCK_PROJECT_CONNECTIONS = [
             "auth_type": "ApiKey",
             "category": "CustomKeys",
             "target": "https://crm.example.com/api",
+        },
+    },
+]
+
+
+SUPPORT_AGENT_ID = f"{AGENTS_PROJECT_ID}/agents/support-agent"
+TRIAGE_AGENT_ID = f"{AGENTS_PROJECT_ID}/agents/triage-agent"
+
+# Data-plane payloads (azure-ai-projects, camelCase wire format).
+MOCK_AGENTS = [
+    {
+        "object": "agent",
+        "id": "agt_11111111",
+        "name": "support-agent",
+        "state": "enabled",
+        "instanceIdentity": {"principalId": "sp-203", "status": "Enabled"},
+        "versions": {
+            "latest": {
+                "id": "agtver_11111111",
+                "name": "support-agent",
+                "version": "3",
+                "createdAt": "2026-08-01T10:00:00Z",
+                "description": "Answers customer support tickets",
+                "definition": {
+                    "kind": "prompt",
+                    "model": "gpt-4o",
+                    "instructions": "Help customers with their tickets.",
+                    "tools": [
+                        {"type": "file_search"},
+                        {"type": "mcp", "server_label": "crm"},
+                    ],
+                },
+            },
+        },
+    },
+    {
+        # Minimal agent: no instance identity (acts as the project identity),
+        # no tools.
+        "object": "agent",
+        "id": "agt_22222222",
+        "name": "triage-agent",
+        "state": "disabled",
+        "versions": {
+            "latest": {
+                "id": "agtver_22222222",
+                "name": "triage-agent",
+                "version": "1",
+                "createdAt": "2026-07-15T08:30:00Z",
+                "definition": {
+                    "kind": "prompt",
+                    "model": "gpt-4o",
+                    "instructions": "Label incoming tickets.",
+                },
+            },
         },
     },
 ]

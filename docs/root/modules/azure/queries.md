@@ -77,3 +77,14 @@ WHERE conn.auth_type IN ["ApiKey", "AccountKey", "AccessKey", "SAS", "PAT",
 RETURN project.display_name, conn.name, conn.category, conn.auth_type,
        conn.target
 ```
+
+## What Can This AI Foundry Agent Reach?
+
+```cypher
+MATCH (project:AzureAIFoundryProject)-[:HAS_AGENT]->(agent:AzureAIFoundryAgent)
+OPTIONAL MATCH (agent)-[:ASSUMES]->(role:AzureRoleDefinition)
+OPTIONAL MATCH (project)-[:HAS_CONNECTION]->(conn:AzureAIFoundryConnection)
+RETURN agent.name, agent.model, agent.tool_types,
+       collect(DISTINCT role.role_name) AS assumed_roles,
+       collect(DISTINCT conn.name) AS reachable_connections
+```

@@ -140,3 +140,37 @@ def test_transform_ai_foundry_connections_project_scope() -> None:
     # No metadata at all: no target resource id, auth type still surfaced.
     assert data[1]["target_resource_id"] is None
     assert data[1]["auth_type"] == "ApiKey"
+
+
+def test_transform_ai_foundry_agents() -> None:
+    from tests.data.azure.ai_foundry import AGENTS_PROJECT_ID
+    from tests.data.azure.ai_foundry import GPT4O_DEPLOYMENT_ID
+    from tests.data.azure.ai_foundry import MOCK_AGENTS
+    from tests.data.azure.ai_foundry import SUPPORT_AGENT_ID
+    from tests.data.azure.ai_foundry import TRIAGE_AGENT_ID
+
+    data = ai_foundry.transform_ai_foundry_agents(
+        MOCK_AGENTS, AGENTS_PROJECT_ID, FOUNDRY_ACCOUNT_ID
+    )
+
+    assert data[0] == {
+        "id": SUPPORT_AGENT_ID,
+        "agent_guid": "agt_11111111",
+        "name": "support-agent",
+        "state": "enabled",
+        "description": "Answers customer support tickets",
+        "kind": "prompt",
+        "model": "gpt-4o",
+        "instructions": "Help customers with their tickets.",
+        "tool_types": ["file_search", "mcp"],
+        "version": "3",
+        "created_at": "2026-08-01T10:00:00Z",
+        "identity_principal_ids": ["sp-203"],
+        "project_id": AGENTS_PROJECT_ID,
+        "model_deployment_id": GPT4O_DEPLOYMENT_ID,
+    }
+    # No instance identity -> empty principal list; no tools -> empty list.
+    assert data[1]["id"] == TRIAGE_AGENT_ID
+    assert data[1]["identity_principal_ids"] == []
+    assert data[1]["tool_types"] == []
+    assert data[1]["model_deployment_id"] == GPT4O_DEPLOYMENT_ID

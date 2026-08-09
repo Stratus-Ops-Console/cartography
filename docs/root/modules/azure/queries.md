@@ -31,3 +31,29 @@ MATCH (principal:EntraServicePrincipal)-[:HAS_ROLE_ASSIGNMENT]->
 WHERE role.role_name IN ["Owner", "Contributor", "User Access Administrator"]
 RETURN principal.display_name, role.role_name, assignment.scope
 ```
+
+## List Deployed AI Models per Foundry Account
+
+```cypher
+MATCH (account:AzureAIFoundryAccount)-[:HAS_DEPLOYMENT]->
+      (deployment:AzureAIFoundryDeployment)
+RETURN account.name, deployment.name, deployment.model_name,
+       deployment.model_version, deployment.sku_name,
+       deployment.rai_policy_name
+```
+
+## Find AI Foundry Accounts That Still Accept API-Key Auth
+
+```cypher
+MATCH (account:AzureAIFoundryAccount)
+WHERE account.disable_local_auth IS NULL OR account.disable_local_auth = false
+RETURN account.name, account.kind, account.endpoint,
+       account.public_network_access
+```
+
+## What Can This AI Foundry Project's Identity Access?
+
+```cypher
+MATCH (project:AzureAIFoundryProject)-[:ASSUMES]->(role:AzureRoleDefinition)
+RETURN project.display_name, role.role_name
+```

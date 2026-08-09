@@ -10,6 +10,7 @@ from cartography.util import run_analysis_job
 from cartography.util import run_typed_analysis_job
 from cartography.util import timeit
 
+from . import ai_foundry
 from . import aks
 from . import app_service
 from . import application_gateways
@@ -146,6 +147,13 @@ def _sync_one_subscription(
         common_job_parameters,
     )
     logic_apps.sync(
+        neo4j_session,
+        credentials,
+        subscription_id,
+        update_tag,
+        common_job_parameters,
+    )
+    ai_foundry.sync(
         neo4j_session,
         credentials,
         subscription_id,

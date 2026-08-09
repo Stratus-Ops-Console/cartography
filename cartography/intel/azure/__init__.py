@@ -15,6 +15,7 @@ from . import aks
 from . import app_service
 from . import application_gateways
 from . import compute
+from . import container_apps
 from . import container_instances
 from . import cosmosdb
 from . import data_factory
@@ -154,6 +155,13 @@ def _sync_one_subscription(
         common_job_parameters,
     )
     ai_foundry.sync(
+        neo4j_session,
+        credentials,
+        subscription_id,
+        update_tag,
+        common_job_parameters,
+    )
+    container_apps.sync(
         neo4j_session,
         credentials,
         subscription_id,

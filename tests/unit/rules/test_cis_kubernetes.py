@@ -250,6 +250,16 @@ class TestCisKubernetesServiceAccountTokenMounts:
         )
         assert "service_account_assumes_gcp_identity" in fact.cypher_query
 
+    def test_service_account_token_mounts_excludes_aks_workload_identity_mounts(self):
+        fact = kubernetes_service_account_tokens_mounted_in_pods.facts[0]
+
+        assert "sa.azure_client_id IS NOT NULL" in fact.cypher_query
+        assert (
+            "EXISTS { (sa)-[:WORKLOAD_IDENTITY_BINDING]->(:EntraServicePrincipal) }"
+            in fact.cypher_query
+        )
+        assert "service_account_assumes_azure_identity" in fact.cypher_query
+
     def test_service_account_token_mounts_excludes_default_sa_mounts(self):
         fact = kubernetes_service_account_tokens_mounted_in_pods.facts[0]
 
@@ -272,6 +282,7 @@ class TestCisKubernetesServiceAccountTokenMounts:
         assert "service_account_name IN" in fact.cypher_visual_query
         assert "service_account_assumes_aws_role" in fact.cypher_visual_query
         assert "service_account_assumes_gcp_identity" in fact.cypher_visual_query
+        assert "service_account_assumes_azure_identity" in fact.cypher_visual_query
 
     def test_service_account_token_mounts_count_query_matches_candidate_filter(self):
         fact = kubernetes_service_account_tokens_mounted_in_pods.facts[0]
@@ -281,6 +292,7 @@ class TestCisKubernetesServiceAccountTokenMounts:
         assert "service_account_name IN" in fact.cypher_count_query
         assert "service_account_assumes_aws_role" in fact.cypher_count_query
         assert "service_account_assumes_gcp_identity" in fact.cypher_count_query
+        assert "service_account_assumes_azure_identity" in fact.cypher_count_query
         assert "effective_automount = true" not in fact.cypher_count_query
 
     def test_cypher_string_list_escapes_values_for_double_quoted_literals(self):

@@ -126,6 +126,16 @@ def test_load_pods(neo4j_session, _create_test_cluster):
         )
         == expected_service_account_names
     )
+    # AKS Workload Identity: only the pod labelled
+    # azure.workload.identity/use=true gets the federated token injected.
+    assert check_nodes(
+        neo4j_session,
+        "KubernetesPod",
+        ["name", "azure_workload_identity_use"],
+    ) == {
+        ("my-pod", False),
+        ("my-service-pod", True),
+    }
 
 
 def test_load_pod_relationships(neo4j_session, _create_test_cluster):

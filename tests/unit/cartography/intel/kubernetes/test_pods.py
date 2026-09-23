@@ -53,6 +53,7 @@ def test_transform_pods_defaults_service_account_name():
             "node_id": "my-cluster-1/node-a",
             "architecture_normalized": None,
             "labels": "{}",
+            "azure_workload_identity_use": False,
             "containers": [],
             "secret_volume_ids": [],
             "secret_env_ids": [],
@@ -250,3 +251,37 @@ def test_transform_pods_extracts_container_ports():
         {"container_port": 53, "protocol": "UDP", "name": "dns"},
         {"container_port": 9000, "protocol": "SCTP", "name": "sctp"},
     ]
+
+
+def _labelled_pod(labels: dict[str, str] | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        metadata=SimpleNamespace(
+            uid="pod-wi",
+            name="wi-pod",
+            namespace="my-namespace",
+            creation_timestamp=None,
+            deletion_timestamp=None,
+            labels=labels,
+        ),
+        spec=SimpleNamespace(
+            containers=[],
+            volumes=[],
+            node_name="node-a",
+            service_account_name="wi-sa",
+        ),
+        status=SimpleNamespace(phase="Running", container_statuses=[]),
+    )
+
+
+def test_transform_pods_detects_aks_workload_identity_label():
+    # The AKS Workload Identity webhook only mutates pods whose label value is
+    # exactly the string "true".
+    cases = [
+        ({"azure.workload.identity/use": "true"}, True),
+        ({"azure.workload.identity/use": "false"}, False),
+        ({"app": "web"}, False),
+        (None, False),
+    ]
+    for labels, expected in cases:
+        (transformed,) = transform_pods([_labelled_pod(labels)], "my-cluster-1")
+        assert transformed["azure_workload_identity_use"] is expected, labels

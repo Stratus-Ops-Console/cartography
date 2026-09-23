@@ -38,6 +38,14 @@ class KubernetesServiceAccountNodeProperties(CartographyNodeProperties):
         "gcp_service_account",
         description="Email from the GKE Workload Identity annotation `iam.gke.io/gcp-service-account`, when present. Used to link the ServiceAccount to a `GCPServiceAccount`.",
     )
+    azure_client_id: PropertyRef = PropertyRef(
+        "azure_client_id",
+        description="Client (application) ID from the AKS Workload Identity annotation `azure.workload.identity/client-id`, when present. Identifies the user-assigned managed identity or Entra application the ServiceAccount federates to, and is used to link the ServiceAccount to the `EntraServicePrincipal` with the same `app_id`.",
+    )
+    azure_tenant_id: PropertyRef = PropertyRef(
+        "azure_tenant_id",
+        description="Entra tenant ID from the AKS Workload Identity annotation `azure.workload.identity/tenant-id`, when present. When absent, the workload identity webhook falls back to the cluster-wide default tenant.",
+    )
     uid: PropertyRef = PropertyRef(
         "uid", description="UID of the Kubernetes ServiceAccount."
     )
@@ -138,6 +146,28 @@ class KubernetesServiceAccountToGCPServiceAccountRel(CartographyRelSchema):
 
 
 @dataclass(frozen=True)
+class KubernetesServiceAccountToEntraServicePrincipalRelProperties(
+    CartographyRelProperties
+):
+    lastupdated: PropertyRef = PropertyRef("lastupdated", set_in_kwargs=True)
+
+
+@dataclass(frozen=True)
+class KubernetesServiceAccountToEntraServicePrincipalRel(CartographyRelSchema):
+    """Links a service account to the Entra service principal (managed identity or application) it federates to through AKS Workload Identity."""
+
+    target_node_label: str = "EntraServicePrincipal"
+    target_node_matcher: TargetNodeMatcher = make_target_node_matcher(
+        {"app_id": PropertyRef("azure_client_id")}
+    )
+    direction: LinkDirection = LinkDirection.OUTWARD
+    rel_label: str = "WORKLOAD_IDENTITY_BINDING"
+    properties: KubernetesServiceAccountToEntraServicePrincipalRelProperties = (
+        KubernetesServiceAccountToEntraServicePrincipalRelProperties()
+    )
+
+
+@dataclass(frozen=True)
 class KubernetesServiceAccountSchema(CartographyNodeSchema):
     "A service account used by workloads in a Kubernetes cluster."
 
@@ -154,5 +184,6 @@ class KubernetesServiceAccountSchema(CartographyNodeSchema):
             KubernetesServiceAccountToNamespaceRel(),
             KubernetesServiceAccountToAWSRoleRel(),
             KubernetesServiceAccountToGCPServiceAccountRel(),
+            KubernetesServiceAccountToEntraServicePrincipalRel(),
         ]
     )

@@ -33,6 +33,30 @@ named for the principal ARN. Without the ConfigMap, Access Entries and external
 OIDC mappings still load, but stale identity cleanup removes mappings that were
 previously supplied only by `aws-auth`.
 
+## Cloud workload identity bindings
+
+Service account annotations connect Kubernetes identities to the cloud
+identities their pods can use:
+
+| Provider | Annotation | Relationship |
+|----------|------------|--------------|
+| EKS (IRSA) | `eks.amazonaws.com/role-arn` | `(:KubernetesServiceAccount)-[:ASSUMES_ROLE]->(:AWSRole {arn})` |
+| GKE Workload Identity | `iam.gke.io/gcp-service-account` | `(:KubernetesServiceAccount)-[:WORKLOAD_IDENTITY_BINDING]->(:GCPServiceAccount {email})` |
+| AKS Workload Identity | `azure.workload.identity/client-id` | `(:KubernetesServiceAccount)-[:WORKLOAD_IDENTITY_BINDING]->(:EntraServicePrincipal {app_id})` |
+
+For AKS, the client id (lowercased) is stored as `azure_client_id` and the
+optional `azure.workload.identity/tenant-id` annotation as `azure_tenant_id`.
+The client id is the `appId` of either a user-assigned managed identity or an
+Entra application, so the edge targets the matching `EntraServicePrincipal`
+synced by the Microsoft module; the principal's `service_principal_type`
+(`ManagedIdentity` or `Application`) tells the two apart. Pods only receive the
+federated token when they carry the label `azure.workload.identity/use: "true"`,
+recorded as `KubernetesPod.azure_workload_identity_use`.
+
+Each edge is created only when the target cloud identity is already in the
+graph, so sync the cloud provider module (AWS, GCP, or Microsoft) before
+Kubernetes. The default module order already does this.
+
 ```{toctree}
 config
 queries

@@ -60,6 +60,26 @@ KUBERNETES_CLUSTER_1_SERVICE_ACCOUNTS_RAW = [
         ),
         automount_service_account_token=True,
     ),
+    V1ServiceAccount(
+        metadata=V1ObjectMeta(
+            name="azure-workload-identity-sa",
+            namespace="demo-ns",
+            uid="i9j0k1l2-3456-7890-i345-901234567890",
+            creation_timestamp=datetime.fromisoformat("2024-09-04T18:45:02+00:00"),
+            resource_version="12349",
+            annotations={
+                # Hand-written annotations may use uppercase GUIDs; the
+                # transform lowercases them to match Microsoft Graph ids.
+                "azure.workload.identity/client-id": (
+                    "5D1C8A1E-1111-4B2C-9D3E-AAAAAAAAAAAA"
+                ),
+                "azure.workload.identity/tenant-id": (
+                    "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                ),
+            },
+        ),
+        automount_service_account_token=True,
+    ),
 ]
 
 # Raw Role data as returned by Kubernetes API
@@ -361,10 +381,12 @@ KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_IDS = [
     "my-cluster-1/demo-ns/another-sa",
     "my-cluster-1/test-ns/test-sa",
     "my-cluster-1/demo-ns/workload-identity-sa",
+    "my-cluster-1/demo-ns/azure-workload-identity-sa",
 ]
 
 KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_ROLE_ARNS = [
     "arn:aws:iam::123456789012:role/demo-irsa-role",
+    None,
     None,
     None,
     None,
@@ -375,7 +397,29 @@ KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_GCP_EMAILS = [
     None,
     None,
     "wi-bound-sa@example-project.iam.gserviceaccount.com",
+    None,
 ]
+
+# AKS Workload Identity client ids after normalization (lowercased).
+KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_AZURE_CLIENT_IDS = [
+    None,
+    None,
+    None,
+    None,
+    "5d1c8a1e-1111-4b2c-9d3e-aaaaaaaaaaaa",
+]
+
+KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_AZURE_TENANT_IDS = [
+    None,
+    None,
+    None,
+    None,
+    "72f988bf-86f1-41af-91ab-2d7cd011db47",
+]
+
+# Object id of the user-assigned managed identity's service principal whose
+# appId equals the SA's azure.workload.identity/client-id annotation.
+AZURE_WORKLOAD_IDENTITY_SERVICE_PRINCIPAL_ID = "9a8b7c6d-2222-4e3f-8a9b-bbbbbbbbbbbb"
 
 KUBERNETES_CLUSTER_1_ROLE_IDS = [
     "my-cluster-1/demo-ns/pod-reader",

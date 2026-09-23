@@ -79,6 +79,7 @@ KUBERNETES_PODS_DATA = [
                 "key2": "val2",
             }
         ),
+        "azure_workload_identity_use": False,
         "containers": [
             KUBERNETES_CONTAINER_DATA[0],
         ],
@@ -109,8 +110,10 @@ KUBERNETES_PODS_DATA = [
             {
                 "key1": "val3",
                 "key2": "val4",
+                "azure.workload.identity/use": "true",
             }
         ),
+        "azure_workload_identity_use": True,
         "containers": [
             KUBERNETES_CONTAINER_DATA[1],
         ],

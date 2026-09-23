@@ -11,6 +11,7 @@ from cartography.intel.okta.users import _load_okta_users
 from tests.data.kubernetes.clusters import KUBERNETES_CLUSTER_DATA
 from tests.data.kubernetes.clusters import KUBERNETES_CLUSTER_IDS
 from tests.data.kubernetes.clusters import KUBERNETES_CLUSTER_NAMES
+from tests.data.kubernetes.rbac import AZURE_WORKLOAD_IDENTITY_SERVICE_PRINCIPAL_ID
 from tests.data.kubernetes.rbac import KUBERNETES_CLUSTER_1_CLUSTER_ROLE_BINDING_IDS
 from tests.data.kubernetes.rbac import KUBERNETES_CLUSTER_1_CLUSTER_ROLE_BINDINGS_RAW
 from tests.data.kubernetes.rbac import KUBERNETES_CLUSTER_1_CLUSTER_ROLE_IDS
@@ -20,6 +21,12 @@ from tests.data.kubernetes.rbac import KUBERNETES_CLUSTER_1_ROLE_BINDING_IDS
 from tests.data.kubernetes.rbac import KUBERNETES_CLUSTER_1_ROLE_BINDINGS_RAW
 from tests.data.kubernetes.rbac import KUBERNETES_CLUSTER_1_ROLE_IDS
 from tests.data.kubernetes.rbac import KUBERNETES_CLUSTER_1_ROLES_RAW
+from tests.data.kubernetes.rbac import (
+    KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_AZURE_CLIENT_IDS,
+)
+from tests.data.kubernetes.rbac import (
+    KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_AZURE_TENANT_IDS,
+)
 from tests.data.kubernetes.rbac import KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_GCP_EMAILS
 from tests.data.kubernetes.rbac import KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_IDS
 from tests.data.kubernetes.rbac import KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_ROLE_ARNS
@@ -111,6 +118,30 @@ def test_sync_rbac_end_to_end(
         email=KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_GCP_EMAILS[3],
         update_tag=TEST_UPDATE_TAG,
     )
+    # AKS Workload Identity binding target: the user-assigned managed
+    # identity's service principal (appId == client id) exists in the graph
+    # before the K8s SA tries to attach to it. The second SP is a decoy that
+    # must not be linked.
+    neo4j_session.run(
+        """
+        UNWIND $sps AS sp
+        MERGE (n:EntraServicePrincipal {id: sp.id})
+        SET n.app_id = sp.app_id,
+            n.service_principal_type = 'ManagedIdentity',
+            n.lastupdated = $update_tag
+        """,
+        sps=[
+            {
+                "id": AZURE_WORKLOAD_IDENTITY_SERVICE_PRINCIPAL_ID,
+                "app_id": KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_AZURE_CLIENT_IDS[4],
+            },
+            {
+                "id": "decoy-sp-object-id",
+                "app_id": "00000000-0000-0000-0000-000000000000",
+            },
+        ],
+        update_tag=TEST_UPDATE_TAG,
+    )
 
     # Act: Run the complete sync
     sync_kubernetes_rbac(
@@ -191,6 +222,41 @@ def test_sync_rbac_end_to_end(
         (
             KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_IDS[3],
             KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_GCP_EMAILS[3],
+        ),
+    }
+
+    # AKS Workload Identity: only the annotated SA carries the (lowercased)
+    # client and tenant ids and is wired to the EntraServicePrincipal whose
+    # app_id equals the client id.
+    actual_service_account_azure_ids = {
+        row
+        for row in check_nodes(
+            neo4j_session,
+            "KubernetesServiceAccount",
+            ["id", "azure_client_id", "azure_tenant_id"],
+        )
+        if row[1] is not None or row[2] is not None
+    }
+    assert actual_service_account_azure_ids == {
+        (
+            KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_IDS[4],
+            KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_AZURE_CLIENT_IDS[4],
+            KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_AZURE_TENANT_IDS[4],
+        ),
+    }
+
+    assert check_rels(
+        neo4j_session,
+        "KubernetesServiceAccount",
+        "id",
+        "EntraServicePrincipal",
+        "id",
+        "WORKLOAD_IDENTITY_BINDING",
+        rel_direction_right=True,
+    ) == {
+        (
+            KUBERNETES_CLUSTER_1_SERVICE_ACCOUNT_IDS[4],
+            AZURE_WORKLOAD_IDENTITY_SERVICE_PRINCIPAL_ID,
         ),
     }
 

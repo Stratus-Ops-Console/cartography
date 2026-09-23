@@ -18,6 +18,10 @@ from cartography.util import timeit
 
 logger = logging.getLogger(__name__)
 
+# The AKS Workload Identity mutating webhook only injects the federated token
+# (and AZURE_CLIENT_ID / AZURE_TENANT_ID env vars) into pods carrying this label.
+AKS_WORKLOAD_IDENTITY_USE_LABEL = "azure.workload.identity/use"
+
 
 def _extract_pod_containers(pod: V1Pod, node_arch: str | None = None) -> dict[str, Any]:
     pod_containers: list[V1Container] = pod.spec.containers
@@ -328,6 +332,10 @@ def transform_pods(
                 ),
                 "architecture_normalized": node_arch,
                 "labels": _format_pod_labels(pod.metadata.labels),
+                "azure_workload_identity_use": (
+                    (pod.metadata.labels or {}).get(AKS_WORKLOAD_IDENTITY_USE_LABEL)
+                    == "true"
+                ),
                 "containers": list(containers.values()),
                 "secret_volume_ids": volume_secrets,
                 "secret_env_ids": env_secrets,

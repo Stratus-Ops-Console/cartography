@@ -69,6 +69,10 @@ class KubernetesPodNodeProperties(CartographyNodeProperties):
         "labels",
         description="Labels are key-value pairs contained in the `PodSpec` and fetched from `pod.metadata.labels`. Stored as a JSON-encoded string.",
     )
+    azure_workload_identity_use: PropertyRef = PropertyRef(
+        "azure_workload_identity_use",
+        description='Whether the pod carries the AKS Workload Identity label `azure.workload.identity/use: "true"`. Only labelled pods receive the federated token for the `azure_client_id` of their ServiceAccount.',
+    )
     cluster_name: PropertyRef = PropertyRef(
         "CLUSTER_NAME",
         set_in_kwargs=True,

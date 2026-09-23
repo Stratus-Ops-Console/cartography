@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 IRSA_ROLE_ARN_ANNOTATION = "eks.amazonaws.com/role-arn"
 GKE_WORKLOAD_IDENTITY_ANNOTATION = "iam.gke.io/gcp-service-account"
+AKS_WORKLOAD_IDENTITY_CLIENT_ID_ANNOTATION = "azure.workload.identity/client-id"
+AKS_WORKLOAD_IDENTITY_TENANT_ID_ANNOTATION = "azure.workload.identity/tenant-id"
 
 
 @timeit
@@ -64,6 +66,17 @@ def get_cluster_role_bindings(k8s_client: K8sClient) -> List[V1ClusterRoleBindin
     return k8s_paginate(k8s_client.rbac.list_cluster_role_binding)
 
 
+def _normalize_guid(value: str | None) -> str | None:
+    """
+    Normalize a GUID-valued annotation (AKS Workload Identity client/tenant id).
+    Microsoft Graph returns ids in lowercase, while hand-written annotations may
+    carry uppercase or padded values that Entra itself treats as equivalent.
+    """
+    if not value:
+        return None
+    return value.strip().lower() or None
+
+
 def transform_service_accounts(
     service_accounts: List[V1ServiceAccount], cluster_name: str
 ) -> List[Dict[str, Any]]:
@@ -85,6 +98,12 @@ def transform_service_accounts(
                 "aws_role_arn": annotations.get(IRSA_ROLE_ARN_ANNOTATION),
                 "gcp_service_account": annotations.get(
                     GKE_WORKLOAD_IDENTITY_ANNOTATION
+                ),
+                "azure_client_id": _normalize_guid(
+                    annotations.get(AKS_WORKLOAD_IDENTITY_CLIENT_ID_ANNOTATION)
+                ),
+                "azure_tenant_id": _normalize_guid(
+                    annotations.get(AKS_WORKLOAD_IDENTITY_TENANT_ID_ANNOTATION)
                 ),
                 "uid": sa.metadata.uid,
                 "creation_timestamp": get_epoch(sa.metadata.creation_timestamp),

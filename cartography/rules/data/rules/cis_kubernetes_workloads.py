@@ -194,6 +194,7 @@ _k8s_service_account_tokens_mounted = Fact(
         coalesce(sa.namespace, pod.namespace) AS service_account_namespace,
         sa.aws_role_arn IS NOT NULL OR EXISTS {{ (sa)-[:ASSUMES_ROLE]->(:AWSRole) }} AS service_account_assumes_aws_role,
         sa.gcp_service_account IS NOT NULL OR EXISTS {{ (sa)-[:WORKLOAD_IDENTITY_BINDING]->(:GCPServiceAccount) }} AS service_account_assumes_gcp_identity,
+        sa.azure_client_id IS NOT NULL OR EXISTS {{ (sa)-[:WORKLOAD_IDENTITY_BINDING]->(:EntraServicePrincipal) }} AS service_account_assumes_azure_identity,
         coalesce(pod.automount_service_account_token, sa.automount_service_account_token, true) AS effective_automount
     WHERE effective_automount = true
       AND NOT (
@@ -202,6 +203,7 @@ _k8s_service_account_tokens_mounted = Fact(
         OR service_account_name IN {K8S_INFRASTRUCTURE_SERVICE_ACCOUNT_NAMES_CYPHER}
         OR service_account_assumes_aws_role
         OR service_account_assumes_gcp_identity
+        OR service_account_assumes_azure_identity
       )
     WITH
         cluster.name AS cluster_name,
@@ -237,6 +239,7 @@ _k8s_service_account_tokens_mounted = Fact(
         coalesce(sa.namespace, pod.namespace) AS service_account_namespace,
         sa.aws_role_arn IS NOT NULL OR EXISTS {{ (sa)-[:ASSUMES_ROLE]->(:AWSRole) }} AS service_account_assumes_aws_role,
         sa.gcp_service_account IS NOT NULL OR EXISTS {{ (sa)-[:WORKLOAD_IDENTITY_BINDING]->(:GCPServiceAccount) }} AS service_account_assumes_gcp_identity,
+        sa.azure_client_id IS NOT NULL OR EXISTS {{ (sa)-[:WORKLOAD_IDENTITY_BINDING]->(:EntraServicePrincipal) }} AS service_account_assumes_azure_identity,
         coalesce(pod.automount_service_account_token, sa.automount_service_account_token, true) AS effective_automount
     WHERE effective_automount = true
       AND NOT (
@@ -245,6 +248,7 @@ _k8s_service_account_tokens_mounted = Fact(
         OR service_account_name IN {K8S_INFRASTRUCTURE_SERVICE_ACCOUNT_NAMES_CYPHER}
         OR service_account_assumes_aws_role
         OR service_account_assumes_gcp_identity
+        OR service_account_assumes_azure_identity
       )
     RETURN *
     """,
@@ -258,13 +262,15 @@ _k8s_service_account_tokens_mounted = Fact(
         coalesce(sa._ont_name, sa.name, pod.service_account_name) AS service_account_name,
         coalesce(sa.namespace, pod.namespace) AS service_account_namespace,
         sa.aws_role_arn IS NOT NULL OR EXISTS {{ (sa)-[:ASSUMES_ROLE]->(:AWSRole) }} AS service_account_assumes_aws_role,
-        sa.gcp_service_account IS NOT NULL OR EXISTS {{ (sa)-[:WORKLOAD_IDENTITY_BINDING]->(:GCPServiceAccount) }} AS service_account_assumes_gcp_identity
+        sa.gcp_service_account IS NOT NULL OR EXISTS {{ (sa)-[:WORKLOAD_IDENTITY_BINDING]->(:GCPServiceAccount) }} AS service_account_assumes_gcp_identity,
+        sa.azure_client_id IS NOT NULL OR EXISTS {{ (sa)-[:WORKLOAD_IDENTITY_BINDING]->(:EntraServicePrincipal) }} AS service_account_assumes_azure_identity
     WHERE NOT (
         service_account_name = 'default'
         OR service_account_namespace IN {K8S_INFRASTRUCTURE_SERVICE_ACCOUNT_NAMESPACES_CYPHER}
         OR service_account_name IN {K8S_INFRASTRUCTURE_SERVICE_ACCOUNT_NAMES_CYPHER}
         OR service_account_assumes_aws_role
         OR service_account_assumes_gcp_identity
+        OR service_account_assumes_azure_identity
       )
     // Count distinct namespaces (matching the KubernetesNamespace anchor / failing unit),
     // not (namespace, service account) pairs.

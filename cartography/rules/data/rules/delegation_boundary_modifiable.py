@@ -185,6 +185,11 @@ _azure_trust_relationship_manipulation = Fact(
     cypher_query="""
     MATCH (sub:AzureSubscription)-[:RESOURCE]->(ra:AzureRoleAssignment)
     MATCH (ra)-[:ROLE_ASSIGNED]->(rd:AzureRoleDefinition)-[:HAS_PERMISSIONS]->(perm:AzurePermissions)
+    // A role assignment inherited from a management group is one node shared by
+    // every subscription, and each subscription links it to its own copy of the
+    // role definition. Keep the copy this subscription owns, or every
+    // subscription pairs with every other subscription's copy.
+    MATCH (sub)-[:RESOURCE]->(rd)
     // EntraPrincipal is the umbrella label carried by EntraUser, EntraGroup and
     // EntraServicePrincipal. Matching it directly keeps the returned rows aligned
     // with the declared asset_label and lets Neo4j use the label index.
@@ -216,7 +221,15 @@ _azure_trust_relationship_manipulation = Fact(
             )
         ] AS matched
     WHERE size(matched) > 0
-    RETURN DISTINCT
+    // One finding per (principal, role definition), matching the AWS and GCP facts: the
+    // same role can be assigned to a principal at several scopes and a definition can
+    // carry several permission sets, so fold both fan-outs into the returned lists
+    // instead of repeating one identity across rows.
+    UNWIND matched AS matched_action
+    WITH sub, rd, principal,
+        collect(DISTINCT matched_action) AS actions,
+        collect(DISTINCT ra.scope) AS resources
+    RETURN
         sub.id AS account,
         sub.id AS account_id,
         coalesce(principal.user_principal_name,
@@ -227,13 +240,14 @@ _azure_trust_relationship_manipulation = Fact(
             WHERE label IN ['EntraUser', 'EntraGroup', 'EntraServicePrincipal']][0] AS principal_type,
         rd.id AS policy_id,
         rd.role_name AS policy_name,
-        matched AS actions,
-        [ra.scope] AS resources
+        actions,
+        resources
     ORDER BY account, principal_name
     """,
     cypher_visual_query="""
     MATCH p1=(sub:AzureSubscription)-[:RESOURCE]->(ra:AzureRoleAssignment)
     MATCH p2=(ra)-[:ROLE_ASSIGNED]->(rd:AzureRoleDefinition)-[:HAS_PERMISSIONS]->(perm:AzurePermissions)
+    MATCH (sub)-[:RESOURCE]->(rd)
     MATCH p3=(principal:EntraPrincipal)-[:HAS_ROLE_ASSIGNMENT]->(ra)
     // Mirror the finding query: at least one searched pattern is granted
     // by actions AND not shadowed by not_actions.
@@ -292,7 +306,7 @@ delegation_boundary_modifiable = Rule(
         "stride:spoofing",
         "stride:tampering",
     ),
-    version="0.1.1",
+    version="0.1.2",
     frameworks=(
         iso27001_annex_a("5.18"),
         iso27001_annex_a("8.2"),

@@ -1,11 +1,17 @@
+# Intel Modules
+
+Select a module for its supported resources, configuration, and generated
+schema documentation.
+
 ```{toctree}
-:caption: List of all intel modules with configuration instructions
+:caption: Modules
 
 modules/aibom/index
 modules/airbyte/index
 modules/anthropic/index
 modules/aws/index
 modules/azure/index
+modules/bbot/index
 modules/bigfix/index
 modules/circleci/index
 modules/cloudflare/index
@@ -21,19 +27,25 @@ modules/github/index
 modules/gitlab/index
 modules/googleworkspace/index
 modules/gsuite/index
+modules/huntress/index
 modules/jamf/index
+modules/jira/index
 modules/jumpcloud/index
 modules/kandji/index
 modules/keycloak/index
 modules/kubernetes/index
 modules/lastpass/index
 modules/microsoft/index
+modules/miradore/index
 modules/modal/index
 modules/netlify/index
+modules/notion/index
 modules/oci/index
 modules/okta/index
 modules/ontology/index
 modules/openai/index
+modules/orca/index
+modules/opsgenie/index
 modules/pagerduty/index
 modules/railway/index
 modules/salesforce/index
@@ -43,6 +55,7 @@ modules/sentinelone/index
 modules/sentry/index
 modules/slack/index
 modules/snipeit/index
+modules/snowflake/index
 modules/socketdev/index
 modules/spacelift/index
 modules/subimage/index
@@ -51,7 +64,12 @@ modules/syft/index
 modules/tailscale/index
 modules/tenable/index
 modules/trivy/index
+modules/ubuntu/index
 modules/vercel/index
+modules/wiz/index
 modules/workday/index
 modules/workos/index
+modules/zendesk/index
+modules/zizmor/index
+modules/zoom/index
 ```

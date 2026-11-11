@@ -209,6 +209,12 @@ CLEANUP_CASES = [
         id="ontology_dnsrecords_to_kubernetes_ingress",
     ),
     pytest.param(
+        RelationshipEffect("DNSRecord", "DNS_POINTS_TO", "RailwayCustomDomain"),
+        None,
+        _rel_cleanup("DNSRecord", "DNS_POINTS_TO", "RailwayCustomDomain"),
+        id="ontology_dnsrecords_to_railway_custom_domain",
+    ),
+    pytest.param(
         RelationshipEffect(
             "DNSRecord",
             "DNS_POINTS_TO",
@@ -279,6 +285,12 @@ CLEANUP_CASES = [
         None,
         _rel_cleanup("DNSRecord", "DNS_POINTS_TO", "AzureFunctionApp"),
         id="ontology_dnsrecords_to_azure_function",
+    ),
+    pytest.param(
+        RelationshipEffect("DNSRecord", "DNS_POINTS_TO", "RailwayServiceDomain"),
+        None,
+        _rel_cleanup("DNSRecord", "DNS_POINTS_TO", "RailwayServiceDomain"),
+        id="ontology_dnsrecords_to_railway_service_domain",
     ),
     pytest.param(
         PropertyEffect("EntraApplication", ("_ont_enabled",)),
@@ -523,10 +535,30 @@ CLEANUP_CASES = [
         id="k8s_lb_container_exposure",
     ),
     pytest.param(
+        PropertyEffect(
+            "ScalewayInstance", ("exposed_internet", "exposed_internet_type")
+        ),
+        None,
+        _prop_cleanup("ScalewayInstance", "exposed_internet", "exposed_internet_type"),
+        id="scaleway_instance_exposure",
+    ),
+    pytest.param(
+        RelationshipEffect("ScalewayLoadBalancer", "EXPOSE", "ScalewayInstance"),
+        None,
+        _rel_cleanup("ScalewayLoadBalancer", "EXPOSE", "ScalewayInstance"),
+        id="scaleway_lb_expose_edges",
+    ),
+    pytest.param(
         PropertyEffect("SemgrepSASTFinding", ("risk_severity",)),
         SEMGREP,
         _prop_cleanup("SemgrepSASTFinding", "risk_severity", scope=SEMGREP),
         id="semgrep_sast_risk_analysis",
+    ),
+    pytest.param(
+        PropertyEffect("SemgrepAISASTFinding", ("risk_severity",)),
+        SEMGREP,
+        _prop_cleanup("SemgrepAISASTFinding", "risk_severity", scope=SEMGREP),
+        id="semgrep_ai_sast_risk_analysis",
     ),
     pytest.param(
         PropertyEffect("SemgrepSCAFinding", ("reachability_risk",)),

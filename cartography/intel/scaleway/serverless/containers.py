@@ -10,6 +10,7 @@ from scaleway_core.api import ScalewayException
 
 from cartography.client.core.tx import load
 from cartography.graph.job import GraphJob
+from cartography.intel.dns_utils import normalize_hostname
 from cartography.intel.scaleway.utils import list_all_regions
 from cartography.intel.scaleway.utils import scaleway_obj_to_dict
 from cartography.models.scaleway.serverless.container import (
@@ -123,6 +124,15 @@ def transform(
         formatted_container["image_digest"] = _resolve_image_digest(
             container.registry_image, registry_image_digests
         )
+        formatted_container["domain_name_normalized"] = normalize_hostname(
+            formatted_container.get("domain_name")
+        )
+        # privacy = 'public' means anonymous callers can invoke it over its auto-assigned
+        # HTTPS domain with no token. Readiness is filtered downstream by the ontology
+        # WORKLOAD_HAS_RUNTIME_IMAGE job, so status is not considered here.
+        exposed = formatted_container.get("privacy") == "public"
+        formatted_container["exposed_internet"] = exposed
+        formatted_container["exposed_internet_type"] = ["direct"] if exposed else None
         containers_by_project.setdefault(project_id, []).append(formatted_container)
 
     return namespaces_by_project, containers_by_project

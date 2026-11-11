@@ -204,7 +204,7 @@ oci_mapping = OntologyMapping(
     ],
 )
 
-# Okta (legacy module - label and _ont_* properties set in raw Cypher)
+# Okta
 okta_mapping = OntologyMapping(
     module_name="okta",
     nodes=[
@@ -241,6 +241,26 @@ pagerduty_mapping = OntologyMapping(
                     indexed=False,
                 ),
                 # email: Not available
+            ],
+        ),
+    ],
+)
+
+# Opsgenie
+opsgenie_mapping = OntologyMapping(
+    module_name="opsgenie",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="OpsgenieTeam",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="name", node_field="name", required=True
+                ),
+                OntologyFieldMapping(
+                    ontology_field="description",
+                    node_field="description",
+                    indexed=False,
+                ),
             ],
         ),
     ],
@@ -390,7 +410,22 @@ salesforce_mapping = OntologyMapping(
     ],
 )
 
+zoom_mapping = OntologyMapping(
+    module_name="zoom",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="ZoomGroup",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="name", node_field="name", required=True
+                ),
+            ],
+        ),
+    ],
+)
+
 GROUPS_ONTOLOGY_MAPPING: dict[str, OntologyMapping] = {
+    "zoom": zoom_mapping,
     "aws": aws_mapping,
     "circleci": circleci_mapping,
     "salesforce": salesforce_mapping,
@@ -404,6 +439,7 @@ GROUPS_ONTOLOGY_MAPPING: dict[str, OntologyMapping] = {
     "oci": oci_mapping,
     "okta": okta_mapping,
     "pagerduty": pagerduty_mapping,
+    "opsgenie": opsgenie_mapping,
     "scaleway": scaleway_mapping,
     "sentry": sentry_mapping,
     "slack": slack_mapping,

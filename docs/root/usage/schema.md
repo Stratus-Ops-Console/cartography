@@ -18,14 +18,13 @@ hand-written page.
 
 ## Schema by module
 
-Every other schema page is reachable through its own module index; these two modules have
-no index page of their own, so they are attached here to keep them out of the orphan list.
+Every module schema page is reachable through its own module index except for the internal
+Cartography metadata schema, which is attached here to keep it out of the orphan list.
 
 ```{toctree}
 :hidden:
 
 ../modules/_cartography-metadata/schema
-../modules/ubuntu/schema
 ```
 
 - [Cartography Metadata](../modules/_cartography-metadata/schema.md)
@@ -34,6 +33,7 @@ no index page of their own, so they are attached here to keep them out of the or
 - [Anthropic](../modules/anthropic/schema.md)
 - [AWS](../modules/aws/schema.md)
 - [Azure](../modules/azure/schema.md)
+- [BBOT](../modules/bbot/schema.md)
 - [Bigfix](../modules/bigfix/schema.md)
 - [Circleci](../modules/circleci/schema.md)
 - [Cloudflare](../modules/cloudflare/schema.md)
@@ -49,19 +49,25 @@ no index page of their own, so they are attached here to keep them out of the or
 - [Gitlab](../modules/gitlab/schema.md)
 - [Googleworkspace](../modules/googleworkspace/schema.md)
 - [Gsuite](../modules/gsuite/schema.md)
+- [Huntress](../modules/huntress/schema.md)
 - [Jamf](../modules/jamf/schema.md)
+- [Jira](../modules/jira/schema.md)
 - [Jumpcloud](../modules/jumpcloud/schema.md)
 - [Kandji](../modules/kandji/schema.md)
 - [Keycloak](../modules/keycloak/schema.md)
 - [Kubernetes](../modules/kubernetes/schema.md)
 - [Lastpass](../modules/lastpass/schema.md)
 - [Microsoft](../modules/microsoft/schema.md)
+- [Miradore](../modules/miradore/schema.md)
 - [Modal](../modules/modal/schema.md)
 - [Netlify](../modules/netlify/schema.md)
+- [Notion](../modules/notion/schema.md)
 - [Oci](../modules/oci/schema.md)
 - [Okta](../modules/okta/schema.md)
 - [Ontology](../modules/ontology/schema.md)
 - [Openai](../modules/openai/schema.md)
+- [Orca Security](../modules/orca/schema.md)
+- [Opsgenie](../modules/opsgenie/schema.md)
 - [Pagerduty](../modules/pagerduty/schema.md)
 - [Railway](../modules/railway/schema.md)
 - [Salesforce](../modules/salesforce/schema.md)
@@ -71,6 +77,7 @@ no index page of their own, so they are attached here to keep them out of the or
 - [Sentry](../modules/sentry/schema.md)
 - [Slack](../modules/slack/schema.md)
 - [Snipeit](../modules/snipeit/schema.md)
+- [Snowflake](../modules/snowflake/schema.md)
 - [Socket.dev](../modules/socketdev/schema.md)
 - [Spacelift](../modules/spacelift/schema.md)
 - [Subimage](../modules/subimage/schema.md)
@@ -81,5 +88,9 @@ no index page of their own, so they are attached here to keep them out of the or
 - [Trivy](../modules/trivy/schema.md)
 - [Ubuntu](../modules/ubuntu/schema.md)
 - [Vercel](../modules/vercel/schema.md)
+- [Wiz](../modules/wiz/schema.md)
 - [Workday](../modules/workday/schema.md)
 - [Workos](../modules/workos/schema.md)
+- [Zendesk](../modules/zendesk/schema.md)
+- [Zizmor](../modules/zizmor/schema.md)
+- [Zoom](../modules/zoom/schema.md)

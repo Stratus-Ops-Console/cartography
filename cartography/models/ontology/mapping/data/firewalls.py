@@ -118,10 +118,53 @@ cloudflare_mapping = OntologyMapping(
     ],
 )
 
+snowflake_mapping = OntologyMapping(
+    module_name="snowflake",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="SnowflakeNetworkPolicy",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="name", node_field="name", required=True
+                ),
+                # A Snowflake network policy only ever gates inbound connections
+                # to the account.
+                OntologyFieldMapping(
+                    ontology_field="direction",
+                    node_field="",
+                    special_handling="static_value",
+                    extra={"value": "inbound"},
+                ),
+            ],
+        ),
+    ],
+)
+
+# DigitalOcean
+digitalocean_mapping = OntologyMapping(
+    module_name="digitalocean",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="DOFirewall",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="name",
+                    node_field="name",
+                    required=True,
+                ),
+                # DigitalOcean firewalls contain both inbound and outbound
+                # rules, so direction belongs on individual rule nodes.
+            ],
+        ),
+    ],
+)
+
 FIREWALLS_ONTOLOGY_MAPPING: dict[str, OntologyMapping] = {
     "aws": aws_mapping,
     "gcp": gcp_mapping,
     "azure": azure_mapping,
     "databricks": databricks_mapping,
     "cloudflare": cloudflare_mapping,
+    "snowflake": snowflake_mapping,
+    "digitalocean": digitalocean_mapping,
 }

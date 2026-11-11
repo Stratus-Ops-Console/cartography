@@ -10,6 +10,7 @@ from scaleway_core.api import ScalewayException
 
 from cartography.client.core.tx import load
 from cartography.graph.job import GraphJob
+from cartography.intel.dns_utils import normalize_hostname
 from cartography.intel.scaleway.utils import list_all_regions
 from cartography.intel.scaleway.utils import scaleway_obj_to_dict
 from cartography.models.scaleway.serverless.function import (
@@ -97,9 +98,16 @@ def transform(
                 function.namespace_id,
             )
             continue
-        functions_by_project.setdefault(project_id, []).append(
-            scaleway_obj_to_dict(function)
+        formatted_function = scaleway_obj_to_dict(function)
+        formatted_function["domain_name_normalized"] = normalize_hostname(
+            formatted_function.get("domain_name")
         )
+        # privacy = 'public' means anonymous callers can invoke it over its auto-assigned
+        # HTTPS domain with no token.
+        exposed = formatted_function.get("privacy") == "public"
+        formatted_function["exposed_internet"] = exposed
+        formatted_function["exposed_internet_type"] = ["direct"] if exposed else None
+        functions_by_project.setdefault(project_id, []).append(formatted_function)
 
     return namespaces_by_project, functions_by_project
 

@@ -14,15 +14,15 @@ import boto3
 import botocore
 import neo4j
 from botocore.exceptions import ClientError
-from botocore.exceptions import ConnectTimeoutError
-from botocore.exceptions import EndpointConnectionError
-from botocore.exceptions import ReadTimeoutError
+from botocore.exceptions import ConnectionError as BotoCoreConnectionError
+from botocore.exceptions import HTTPClientError
 from policyuniverse.policy import Policy
 
 from cartography.analysis.aws.s3.analysis import AWS_S3ACL_ANALYSIS
 from cartography.client.core.tx import load
 from cartography.client.core.tx import load_matchlinks
 from cartography.graph.job import GraphJob
+from cartography.intel.aws.util.arns import get_account_partition
 from cartography.intel.aws.util.botocore_config import create_boto3_client
 from cartography.intel.aws.util.botocore_config import get_botocore_config
 from cartography.models.aws.s3.acl import S3AclSchema
@@ -49,10 +49,20 @@ stat_handler = get_stats_client(__name__)
 
 BUCKET_BATCH_SIZE = 50
 
-S3_DETAIL_TRANSPORT_ERRORS = (
-    ConnectTimeoutError,
-    EndpointConnectionError,
-    ReadTimeoutError,
+# Transport-level failures where the endpoint could not be reached at all, as
+# opposed to AWS answering with an error. These are caught rather than raised so
+# that one unreachable bucket cannot abort an entire account's sync.
+#
+# The two botocore base classes are used deliberately in place of an enumeration
+# of leaf classes. Enumerating leaves silently misses siblings: ProxyConnectionError
+# (raised when an egress proxy cannot reach a bucket's regional endpoint) is a
+# sibling of EndpointConnectionError, not a subclass of it, so listing the latter
+# does not cover the former.
+S3_TRANSPORT_ERRORS = (
+    # ConnectTimeoutError, EndpointConnectionError, ProxyConnectionError, SSLError
+    BotoCoreConnectionError,
+    # ReadTimeoutError, ConnectionClosedError, ResponseStreamingError
+    HTTPClientError,
 )
 
 
@@ -126,11 +136,20 @@ def get_s3_bucket_list(boto3_session: boto3.session.Session) -> List[Dict]:
                 continue
             else:
                 raise
-        except (ConnectTimeoutError, EndpointConnectionError, ReadTimeoutError):
+        except S3_TRANSPORT_ERRORS as error:
             bucket["Region"] = None
+            # Suffixed with the exception class so a proxy or DNS failure is
+            # distinguishable from a plain timeout. Cardinality is bounded by the
+            # leaf classes under S3_TRANSPORT_ERRORS.
+            stat_handler.incr(
+                f"bucket_region_discovery_transport_error.{error.__class__.__name__}",
+            )
             logger.warning(
-                "skipping bucket='%s' region discovery due to transport timeout/connection error.",
+                "Failed to discover the region for bucket %s due to transient %s: %s. "
+                "Leaving its region unset.",
                 bucket["Name"],
+                error.__class__.__name__,
+                error,
             )
     return buckets
 
@@ -237,7 +256,7 @@ def get_policy(bucket: Dict, client: botocore.client.BaseClient) -> MaybeFailed:
             return FETCH_FAILED if is_failure else None
         else:
             raise
-    except S3_DETAIL_TRANSPORT_ERRORS as error:
+    except S3_TRANSPORT_ERRORS as error:
         return _handle_s3_detail_transport_error(bucket["Name"], "policy", error)
 
 
@@ -254,7 +273,7 @@ def get_acl(bucket: Dict, client: botocore.client.BaseClient) -> MaybeFailed:
             return FETCH_FAILED if is_failure else None
         else:
             raise
-    except S3_DETAIL_TRANSPORT_ERRORS as error:
+    except S3_TRANSPORT_ERRORS as error:
         return _handle_s3_detail_transport_error(bucket["Name"], "ACL", error)
 
 
@@ -271,7 +290,7 @@ def get_encryption(bucket: Dict, client: botocore.client.BaseClient) -> MaybeFai
             return FETCH_FAILED if is_failure else None
         else:
             raise
-    except S3_DETAIL_TRANSPORT_ERRORS as error:
+    except S3_TRANSPORT_ERRORS as error:
         return _handle_s3_detail_transport_error(bucket["Name"], "encryption", error)
 
 
@@ -288,7 +307,7 @@ def get_versioning(bucket: Dict, client: botocore.client.BaseClient) -> MaybeFai
             return FETCH_FAILED if is_failure else None
         else:
             raise
-    except S3_DETAIL_TRANSPORT_ERRORS as error:
+    except S3_TRANSPORT_ERRORS as error:
         return _handle_s3_detail_transport_error(bucket["Name"], "versioning", error)
 
 
@@ -308,7 +327,7 @@ def get_public_access_block(
             return FETCH_FAILED if is_failure else None
         else:
             raise
-    except S3_DETAIL_TRANSPORT_ERRORS as error:
+    except S3_TRANSPORT_ERRORS as error:
         return _handle_s3_detail_transport_error(
             bucket["Name"],
             "public access block",
@@ -331,7 +350,7 @@ def get_bucket_ownership_controls(
             return FETCH_FAILED if is_failure else None
         else:
             raise
-    except S3_DETAIL_TRANSPORT_ERRORS as error:
+    except S3_TRANSPORT_ERRORS as error:
         return _handle_s3_detail_transport_error(
             bucket["Name"],
             "ownership controls",
@@ -352,7 +371,7 @@ def get_bucket_logging(bucket: Dict, client: botocore.client.BaseClient) -> Mayb
             return FETCH_FAILED if is_failure else None
         else:
             raise
-    except S3_DETAIL_TRANSPORT_ERRORS as error:
+    except S3_TRANSPORT_ERRORS as error:
         return _handle_s3_detail_transport_error(
             bucket["Name"],
             "logging status",
@@ -468,6 +487,7 @@ def _merge_bucket_details(
     bucket_data: Dict,
     s3_details_iter: Generator[Any, Any, Any],
     aws_account_id: str,
+    partition: str,
 ) -> Dict[str, Any]:
     """
     Merge basic bucket data with details (policy, encryption, versioning, etc.)
@@ -493,7 +513,7 @@ def _merge_bucket_details(
         buckets_by_name[bucket["Name"]] = {
             "Name": bucket["Name"],
             "Region": bucket["Region"],
-            "Arn": "arn:aws:s3:::" + bucket["Name"],
+            "Arn": f"arn:{partition}:s3:::" + bucket["Name"],
             "CreationDate": str(bucket["CreationDate"]),
         }
 
@@ -663,6 +683,7 @@ def load_s3_details(
     bucket_data: Dict,
     aws_account_id: str,
     update_tag: int,
+    partition: str,
 ) -> None:
     """
     Merge bucket details with basic bucket data and load using composite schemas.
@@ -671,7 +692,12 @@ def load_s3_details(
     so if a fetch fails for one group, we skip loading that group for this sync.
     """
     # Merge all bucket data into separate lists per property group
-    merged_data = _merge_bucket_details(bucket_data, s3_details_iter, aws_account_id)
+    merged_data = _merge_bucket_details(
+        bucket_data,
+        s3_details_iter,
+        aws_account_id,
+        partition,
+    )
 
     # cleanup existing policy properties set on S3 Buckets
     run_cleanup_job(
@@ -1342,6 +1368,21 @@ def _sync_s3_notifications(
                 f"Failed to retrieve notification configuration for bucket {bucket['Name']}: {e}"
             )
             continue
+        except S3_TRANSPORT_ERRORS as error:
+            # Reached for a bucket whose region is unreachable from this network:
+            # the request is redirected to the bucket's regional endpoint, which
+            # never answers. Without this the whole account's sync would abort.
+            stat_handler.incr(
+                f"bucket_notification_transport_error.{error.__class__.__name__}",
+            )
+            logger.warning(
+                "Failed to retrieve the notification configuration for bucket %s due to "
+                "transient %s: %s. Skipping it.",
+                bucket["Name"],
+                error.__class__.__name__,
+                error,
+            )
+            continue
 
 
 @timeit
@@ -1372,6 +1413,7 @@ def sync(
         bucket_data,
         current_aws_account_id,
         update_tag,
+        get_account_partition(regions, boto3_session.region_name),
     )
     cleanup_s3_buckets(neo4j_session, common_job_parameters)
     cleanup_s3_bucket_acl_and_policy(neo4j_session, common_job_parameters)

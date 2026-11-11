@@ -187,10 +187,18 @@ from cartography.models.kubernetes.statefulsets import (
 from cartography.models.kubernetes.users import KubernetesUserToAWSRoleRel
 from cartography.models.oci.group import OCIGroupToOCIUserRel
 from cartography.models.oci.policy import OCIPolicyToGroupRefRel
+from cartography.models.okta.awssaml import OktaGroupToAWSRoleAllowedByMatchLink
+from cartography.models.okta.group import OktaGroupToOktaUserDeprecatedRel
 from cartography.models.openai.adminapikey import OpenAIAdminApiKeyToSARel
 from cartography.models.openai.adminapikey import OpenAIAdminApiKeyToUserRel
 from cartography.models.openai.apikey import OpenAIApiKeyToSARel
 from cartography.models.openai.apikey import OpenAIApiKeyToUserRel
+from cartography.models.railway.deployment import RailwayDeploymentToECRImageRel
+from cartography.models.railway.deployment import (
+    RailwayDeploymentToGCPArtifactRegistryImageRel,
+)
+from cartography.models.railway.deployment import RailwayDeploymentToGitHubImageRel
+from cartography.models.railway.deployment import RailwayDeploymentToGitLabImageRel
 from cartography.models.scaleway.iam.apikey import ScalewayApiKeyToApplicationRel
 from cartography.models.scaleway.iam.apikey import ScalewayApiKeyToUserRel
 from cartography.models.scaleway.serverless.container import (
@@ -198,10 +206,13 @@ from cartography.models.scaleway.serverless.container import (
 )
 from cartography.models.sentry.member import SentryUserToTeamAdminOfRel
 from cartography.models.slack.group import SlackGroupToCreatorRel
+from cartography.models.snowflake.service import SnowflakeServiceContainerToImageRel
+from cartography.models.snowflake.service import SnowflakeServiceToWarehouseRel
 from cartography.models.tailscale.group import (
     TailscaleUserToGroupInheritedMemberMatchLink,
 )
 from cartography.models.vercel.accessgroup import VercelAccessGroupToUserRel
+from cartography.models.zendesk.api_token import ZendeskAPITokenToCreatorRel
 
 # DEPRECATED: pre-V1 rel classes tolerated until they are removed in v1.0.0.
 LEGACY_REL_WHITELIST: frozenset[type] = frozenset(
@@ -216,6 +227,8 @@ LEGACY_REL_WHITELIST: frozenset[type] = frozenset(
         ECSTaskToECSClusterRel,
         KubernetesContainerToKubernetesPodRel,
         KubernetesPodToKubernetesNamespaceRel,
+        # DEPRECATED: replaced by MEMBER_OF, will be removed in v1.0.0.
+        OktaGroupToOktaUserDeprecatedRel,
         # Kubernetes models its cluster as the tenant, so the pod's, namespace's,
         # and workload controllers' sub_resource_relationship uses RESOURCE on a
         # pair that the ontology also constrains as WORKLOAD_PARENT. Whitelisted
@@ -233,6 +246,7 @@ LEGACY_REL_WHITELIST: frozenset[type] = frozenset(
         KeycloakUserAssumeRoleMatchLink,
         AWSSSOGroupToPermissionSetRel,
         KeycloakGroupToRoleRel,
+        OktaGroupToAWSRoleAllowedByMatchLink,
         # ALLOWED_BY is a distinct "this role is assumable by that SSO user"
         # semantic (PermissionRole->UserAccount), not a role assignment, so it
         # intentionally runs counter to the HAS_ROLE (UserAccount->PermissionRole)
@@ -302,6 +316,9 @@ LEGACY_REL_WHITELIST: frozenset[type] = frozenset(
         # CREATED records who created a Slack usergroup, a historical fact rather
         # than current membership. Distinct from MEMBER_OF.
         SlackGroupToCreatorRel,
+        # CREATED records who created a Zendesk API token, a historical audit
+        # fact distinct from the canonical OWNED_BY assignee edge.
+        ZendeskAPITokenToCreatorRel,
         # MAPS_TO is identity federation (a Kubernetes group maps to an AWS
         # user), not group membership. Distinct from MEMBER_OF.
         KubernetesGroupToAWSUserRel,
@@ -336,8 +353,8 @@ LEGACY_REL_WHITELIST: frozenset[type] = frozenset(
         # HAS_IMAGE is the raw ingest-time (:Container|:Function)->(:Image)
         # reference, matched by runtime digest at load time and possibly pointing
         # at a manifest list. The canonical RESOLVED_IMAGE edge is derived from it
-        # by resolved_image_analysis.json (resolving manifest lists to the concrete
-        # single-platform image). Both coexist, so HAS_IMAGE is whitelisted as a
+        # by the RESOLVED_IMAGE_JOBS analysis jobs (resolving manifest lists to the
+        # concrete single-platform image). Both coexist, so HAS_IMAGE is whitelisted as a
         # distinct semantic rather than a violation of RESOLVED_IMAGE.
         KubernetesContainerToECRImageRel,
         KubernetesContainerToGitLabContainerImageRel,
@@ -359,7 +376,12 @@ LEGACY_REL_WHITELIST: frozenset[type] = frozenset(
         AzureContainerInstanceToGitLabContainerImageRel,
         AzureContainerInstanceToGCPArtifactRegistryImageRel,
         AzureContainerInstanceToGitHubContainerImageRel,
+        RailwayDeploymentToECRImageRel,
+        RailwayDeploymentToGitLabImageRel,
+        RailwayDeploymentToGCPArtifactRegistryImageRel,
+        RailwayDeploymentToGitHubImageRel,
         ScalewayServerlessContainerToImageRel,
+        SnowflakeServiceContainerToImageRel,
         AWSLambdaToECRImageRel,
         AWSLambdaToGitLabContainerImageRel,
         AWSLambdaToGCPArtifactRegistryImageRel,
@@ -368,5 +390,12 @@ LEGACY_REL_WHITELIST: frozenset[type] = frozenset(
         AzureFunctionAppToGitLabContainerImageRel,
         AzureFunctionAppToGCPArtifactRegistryImageRel,
         AzureFunctionAppToGitHubContainerImageRel,
+        # USES_WAREHOUSE is a Snowflake service's data-plane dependency on the
+        # warehouse its container code runs SQL against, not the workload's
+        # scheduling parent: that is the compute pool, which the service reaches
+        # through the canonical WORKLOAD_PARENT edge. Both endpoints happen to
+        # carry ComputeCluster (warehouses and compute pools are both elastic
+        # clusters), so the guard would otherwise flag it. Distinct semantic.
+        SnowflakeServiceToWarehouseRel,
     }
 )

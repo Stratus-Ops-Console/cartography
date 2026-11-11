@@ -30,6 +30,7 @@ import neo4j
 from botocore.exceptions import ConnectTimeoutError
 from botocore.exceptions import EndpointConnectionError
 from botocore.exceptions import ReadTimeoutError
+from botocore.exceptions import SSLError
 from botocore.parsers import ResponseParserError
 
 from cartography import helpers
@@ -664,7 +665,7 @@ def aws_handle_regions(func: AWSGetFunc) -> AWSGetFunc:
 
     Args:
         func: An AWS API function that returns an iterable (typically a list)
-              of resources. Should be a 'get_' function that queries AWS services.
+              of resources. Should be a ``get_`` function that queries AWS services.
 
     Returns:
         The decorated function with error handling and retry logic applied.
@@ -754,6 +755,16 @@ def aws_handle_regions(func: AWSGetFunc) -> AWSGetFunc:
             logger.warning(
                 "Encountered a timeout while calling a regional AWS endpoint. "
                 "Skipping this region.",
+            )
+            return []
+        except SSLError as e:
+            # Certificate validation is still enforced; a single regional endpoint
+            # failing TLS should cost that region's data, not the whole account sync.
+            logger.warning(
+                "TLS validation failed while calling a regional AWS endpoint in %s. "
+                "Skipping this region: %s",
+                func.__name__,
+                e,
             )
             return []
 

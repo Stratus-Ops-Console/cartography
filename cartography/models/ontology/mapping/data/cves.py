@@ -30,6 +30,17 @@ _INSPECTOR_SEVERITY = {
     "INFORMATIONAL": "info",
 }
 
+# Orca's VulnerabilityV2 query emits uppercase CVSS severity names. Include
+# lowercase variants so normalized results remain stable across API casing.
+_ORCA_CVSS_SEVERITY = {
+    **_CVSS_SEVERITY,
+    "none": "info",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "critical": "critical",
+}
+
 # GitHub GraphQL severity (uppercase API + lowercase fixture variants)
 _GITHUB_SEVERITY = {
     "LOW": "low",
@@ -381,6 +392,34 @@ sentinelone_mapping = OntologyMapping(
     ],
 )
 
+# Tenable's vulnerability export names CVEs as bare identifier strings on a plugin
+# and supplies no per-CVE metadata, so :TenableCve carries identity only. Severity
+# and state describe a detection rather than a CVE and stay on :TenableFinding,
+# reachable from the CVE through the plugin that names it.
+#
+# Note the shape differs from most scanners. Trivy, Inspector, SentinelOne, Orca and
+# Wiz put :CVE on the finding; of those, only Trivy maps _ont_vuln_status, as a
+# detection status. Tenable puts :CVE on the vulnerability record, like the NVD
+# (`cve`), Ubuntu and CrowdStrike mappings. Those feeds score each CVE; Tenable's
+# does not, so it contributes no _ont_base_severity or _ont_vuln_status. Queries
+# filtering :CVE on those fields will not return Tenable data.
+tenable_mapping = OntologyMapping(
+    module_name="tenable",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="TenableCve",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="cve_id",
+                    node_field="cve_id",
+                    required=True,
+                ),
+            ],
+        ),
+    ],
+)
+
+
 # SemgrepSCAFinding is a hybrid finding: it carries :CVE when CVE-backed and
 # :SecurityIssue when advisory-only (see cartography/models/semgrep/findings.py).
 # The semantic-label resolver returns a single mapping per primary label regardless
@@ -468,6 +507,81 @@ aws_inspector_mapping = OntologyMapping(
     ],
 )
 
+# Wiz findings are either CVE-backed vulnerabilities or non-CVE security issues.
+# The ingestion resolver selects the security-issues mapping first, so that mapping
+# owns the normalized fields; this entry registers the conditional :CVE label for
+# ontology documentation and validation.
+wiz_mapping = OntologyMapping(
+    module_name="wiz",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="WizFinding",
+            fields=[
+                OntologyFieldMapping(ontology_field="cve_id", node_field="cve_id"),
+                OntologyFieldMapping(
+                    ontology_field="description",
+                    node_field="cve_description",
+                    indexed=False,
+                ),
+                OntologyFieldMapping(ontology_field="base_score", node_field="score"),
+                OntologyFieldMapping(
+                    ontology_field="base_severity",
+                    node_field="cvss_severity",
+                    special_handling="mapping",
+                    extra={"map": _CVSS_SEVERITY},
+                ),
+                OntologyFieldMapping(
+                    ontology_field="exploitability_score",
+                    node_field="exploitability_score",
+                ),
+                OntologyFieldMapping(
+                    ontology_field="impact_score", node_field="impact_score"
+                ),
+            ],
+        ),
+    ],
+)
+
+orca_mapping = OntologyMapping(
+    module_name="orca",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="OrcaVulnerabilityFinding",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="cve_id",
+                    node_field="cve_id",
+                    required=True,
+                ),
+                OntologyFieldMapping(
+                    ontology_field="description",
+                    node_field="description",
+                    indexed=False,
+                ),
+                OntologyFieldMapping(
+                    ontology_field="references",
+                    node_field="references",
+                    indexed=False,
+                ),
+                OntologyFieldMapping(
+                    ontology_field="vector_string",
+                    node_field="vector_string",
+                ),
+                OntologyFieldMapping(
+                    ontology_field="base_score",
+                    node_field="base_score",
+                ),
+                OntologyFieldMapping(
+                    ontology_field="base_severity",
+                    node_field="base_severity",
+                    special_handling="mapping",
+                    extra={"map": _ORCA_CVSS_SEVERITY},
+                ),
+            ],
+        ),
+    ],
+)
+
 CVES_ONTOLOGY_MAPPING: dict[str, OntologyMapping] = {
     "cve": cve_mapping,
     "trivy": trivy_mapping,
@@ -475,6 +589,9 @@ CVES_ONTOLOGY_MAPPING: dict[str, OntologyMapping] = {
     "crowdstrike": crowdstrike_mapping,
     "github": github_mapping,
     "sentinelone": sentinelone_mapping,
+    "tenable": tenable_mapping,
     "semgrep": semgrep_mapping,
     "aws": aws_inspector_mapping,
+    "wiz": wiz_mapping,
+    "orca": orca_mapping,
 }

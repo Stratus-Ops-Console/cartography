@@ -1,7 +1,17 @@
 import json
+from copy import deepcopy
 from types import SimpleNamespace
 
+from kubernetes.client import V1EphemeralVolumeSource
+from kubernetes.client import V1PersistentVolumeClaimSpec
+from kubernetes.client import V1PersistentVolumeClaimTemplate
+from kubernetes.client import V1Volume
+from kubernetes.client import V1VolumeDevice
+from kubernetes.client import V1VolumeMount
+
+from cartography.intel.kubernetes.pods import get_pods
 from cartography.intel.kubernetes.pods import transform_pods
+from tests.data.kubernetes.storage import RAW_GPU_PODS
 
 
 def test_transform_pods_defaults_service_account_name():
@@ -48,6 +58,8 @@ def test_transform_pods_defaults_service_account_name():
             "host_network": None,
             "seccomp_profile_type": None,
             "host_path_volume_paths": [],
+            "persistent_volume_claim_names": [],
+            "persistent_volume_claim_ids": [],
             "service_account_id": "my-cluster-1/my-namespace/default",
             "node": "node-a",
             "node_id": "my-cluster-1/node-a",
@@ -59,6 +71,41 @@ def test_transform_pods_defaults_service_account_name():
             "secret_env_ids": [],
         },
     ]
+
+
+def test_transform_pods_maps_generic_ephemeral_volume_to_generated_claim():
+    pod = deepcopy(RAW_GPU_PODS[0])
+    pod.metadata.name = "ephemeral-pod"
+    pod.spec.volumes = [
+        V1Volume(
+            name="scratch",
+            ephemeral=V1EphemeralVolumeSource(
+                volume_claim_template=V1PersistentVolumeClaimTemplate(
+                    spec=V1PersistentVolumeClaimSpec()
+                )
+            ),
+        )
+    ]
+    pod.spec.containers[0].volume_mounts = [
+        V1VolumeMount(name="scratch", mount_path="/scratch")
+    ]
+
+    transformed = transform_pods([pod], "my-cluster-1")
+
+    assert transformed[0]["persistent_volume_claim_names"] == ["ephemeral-pod-scratch"]
+    assert transformed[0]["persistent_volume_claim_ids"] == [
+        "my-cluster-1/my-namespace/ephemeral-pod-scratch"
+    ]
+    container = transformed[0]["containers"][0]
+    assert container["persistent_volume_claim_ids"] == [
+        "my-cluster-1/my-namespace/ephemeral-pod-scratch"
+    ]
+    assert container["persistent_volume_claim_read_write_ids"] == [
+        "my-cluster-1/my-namespace/ephemeral-pod-scratch"
+    ]
+    assert json.loads(container["persistent_volume_claim_mounts"])[0]["mount_path"] == (
+        "/scratch"
+    )
 
 
 def _owned_pod(uid: str, name: str, owner_kind: str, owner_uid: str) -> SimpleNamespace:
@@ -171,6 +218,7 @@ def test_transform_pods_propagates_node_architecture_to_pod_and_container():
                     resources=None,
                     env=None,
                     env_from=None,
+                    volume_mounts=None,
                 ),
             ],
             volumes=[],
@@ -210,6 +258,7 @@ def test_transform_pods_extracts_container_ports():
                     resources=None,
                     env=None,
                     env_from=None,
+                    volume_mounts=None,
                     ports=[
                         SimpleNamespace(
                             container_port=8080,
@@ -251,6 +300,141 @@ def test_transform_pods_extracts_container_ports():
         {"container_port": 53, "protocol": "UDP", "name": "dns"},
         {"container_port": 9000, "protocol": "SCTP", "name": "sctp"},
     ]
+
+
+def test_transform_pods_serializes_container_persistent_volume_claim_mounts():
+    # Arrange
+    pod = deepcopy(RAW_GPU_PODS[0])
+    pod.spec.containers[0].volume_mounts = [
+        V1VolumeMount(
+            name="shared-data",
+            mount_path="/data",
+            read_only=False,
+            sub_path="checkpoints",
+        ),
+        V1VolumeMount(
+            name="shared-data",
+            mount_path="/models",
+            read_only=True,
+        ),
+        V1VolumeMount(name="unmatched-volume", mount_path="/ignored"),
+    ]
+
+    # Act
+    transformed = transform_pods([pod], "my-cluster-1")
+
+    # Assert
+    container = transformed[0]["containers"][0]
+    assert container["persistent_volume_claim_ids"] == [
+        "my-cluster-1/my-namespace/shared-data"
+    ]
+    assert container["persistent_volume_claim_read_write_ids"] == [
+        "my-cluster-1/my-namespace/shared-data"
+    ]
+    assert json.loads(container["persistent_volume_claim_mounts"]) == [
+        {
+            "claim_id": "my-cluster-1/my-namespace/shared-data",
+            "claim_name": "shared-data",
+            "volume_name": "shared-data",
+            "mount_path": "/data",
+            "mount_propagation": None,
+            "read_only": False,
+            "recursive_read_only": None,
+            "sub_path": "checkpoints",
+            "sub_path_expr": None,
+        },
+        {
+            "claim_id": "my-cluster-1/my-namespace/shared-data",
+            "claim_name": "shared-data",
+            "volume_name": "shared-data",
+            "mount_path": "/models",
+            "mount_propagation": None,
+            "read_only": True,
+            "recursive_read_only": None,
+            "sub_path": None,
+            "sub_path_expr": None,
+        },
+    ]
+
+
+def test_transform_pods_serializes_container_persistent_volume_claim_devices():
+    # Arrange
+    pod = deepcopy(RAW_GPU_PODS[0])
+    pod.spec.containers[0].volume_mounts = []
+    pod.spec.containers[0].volume_devices = [
+        V1VolumeDevice(name="shared-data", device_path="/dev/training-data"),
+        V1VolumeDevice(name="unmatched-volume", device_path="/dev/ignored"),
+    ]
+
+    # Act
+    transformed = transform_pods([pod], "my-cluster-1")
+
+    # Assert
+    container = transformed[0]["containers"][0]
+    assert container["persistent_volume_claim_ids"] == []
+    assert container["persistent_volume_claim_read_write_ids"] == []
+    assert container["persistent_volume_claim_device_ids"] == [
+        "my-cluster-1/my-namespace/shared-data"
+    ]
+    assert json.loads(container["persistent_volume_claim_devices"]) == [
+        {
+            "claim_id": "my-cluster-1/my-namespace/shared-data",
+            "claim_name": "shared-data",
+            "device_path": "/dev/training-data",
+            "volume_name": "shared-data",
+        }
+    ]
+
+
+def test_transform_pods_excludes_read_only_claim_from_read_write_ids():
+    pod = deepcopy(RAW_GPU_PODS[0])
+    pod.spec.containers[0].volume_mounts = [
+        V1VolumeMount(name="shared-data", mount_path="/data", read_only=True)
+    ]
+
+    container = transform_pods([pod], "my-cluster-1")[0]["containers"][0]
+
+    assert container["persistent_volume_claim_read_write_ids"] == []
+
+
+def test_transform_pods_treats_pod_level_read_only_claim_as_read_only():
+    pod = deepcopy(RAW_GPU_PODS[0])
+    pod.spec.volumes[0].persistent_volume_claim.read_only = True
+    pod.spec.containers[0].volume_mounts = [
+        V1VolumeMount(name="shared-data", mount_path="/data", read_only=False)
+    ]
+
+    container = transform_pods([pod], "my-cluster-1")[0]["containers"][0]
+
+    assert container["persistent_volume_claim_ids"] == [
+        "my-cluster-1/my-namespace/shared-data"
+    ]
+    assert container["persistent_volume_claim_read_write_ids"] == []
+    assert json.loads(container["persistent_volume_claim_mounts"])[0]["read_only"]
+
+
+def test_get_pods_streams_one_page_at_a_time():
+    calls = []
+    pages = [["pod-a", "pod-b"], ["pod-c"]]
+
+    def list_pod_for_all_namespaces(limit, _continue=None):
+        calls.append(_continue)
+        index = int(_continue) if _continue else 0
+        return SimpleNamespace(
+            items=pages[index],
+            metadata=SimpleNamespace(_continue="1" if index == 0 else None),
+        )
+
+    client = SimpleNamespace(
+        core=SimpleNamespace(list_pod_for_all_namespaces=list_pod_for_all_namespaces)
+    )
+    pods = get_pods(client)
+
+    assert next(pods) == "pod-a"
+    assert next(pods) == "pod-b"
+    assert calls == [None]
+    assert list(pods) == ["pod-c"]
+    assert calls == [None, "1"]
 
 
 def _labelled_pod(labels: dict[str, str] | None) -> SimpleNamespace:

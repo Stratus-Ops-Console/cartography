@@ -26,6 +26,7 @@ from cartography.graph.analysis import SetRelationshipPropertyIfMissing
 from cartography.graph.analysisbuilder import properties_set
 from cartography.graph.analysisbuilder import relationships_added
 from cartography.models.aws_tagging import AWS_TAGGABLE_RESOURCES
+from cartography.models.bbot.events import BBOT_RELATIONSHIP_CATALOG
 from cartography.models.core.common import PropertyRef
 from cartography.models.core.nodes import CartographyNodeProperties
 from cartography.models.core.nodes import CartographyNodeSchema
@@ -60,12 +61,14 @@ __all__ = [
     # Scoping one module's view
     "scope_node_to_module",
     "relationships_for_module",
+    "relationships_for_node",
     "relationship_touches_node",
     "labels_carried_by",
     # Result types
     "DataModel",
     "Node",
     "Relationship",
+    "NodeRelationship",
     "Property",
     "PropertyProvenance",
     "NodeLabelProvenance",
@@ -75,6 +78,7 @@ __all__ = [
     "RelationshipCatalogDefinition",
     "OntologySemanticLabel",
     "OntologyRelationshipConstraint",
+    "OntologyExpectedEdge",
     "ModelClass",
 ]
 
@@ -141,6 +145,7 @@ class PermissionRelationshipDefinition:
     permissions: tuple[str, ...]
     config_path: str
     target_precondition: TargetPreconditionDefinition | None = None
+    data_permissions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -246,11 +251,58 @@ class OntologySemanticLabel:
 
 @dataclass(frozen=True)
 class OntologyRelationshipConstraint:
-    """A canonical relationship name validated between two ontology labels."""
+    """
+    A canonical relationship name validated between two ontology labels.
+
+    Constraints only govern name and direction when both endpoints carry the listed
+    ontology labels. They do not assert that the edge exists, and they are not
+    inherited onto concrete node schemas. See ``OntologyExpectedEdge`` for edges
+    that models or analysis actually materialize under ontology labels.
+    """
 
     source_label: str
     label: str
     target_label: str
+
+
+@dataclass(frozen=True)
+class OntologyExpectedEdge:
+    """
+    A relationship materialized under ontology labels.
+
+    Unlike ``OntologyRelationshipConstraint``, these edges are produced by node
+    schemas, matchlinks, analysis jobs, permission evaluation, or the runtime
+    catalog. Schema docs and autocomplete project them onto concrete nodes that
+    carry either endpoint's semantic label, keeping the far endpoint semantic.
+    """
+
+    source_label: str
+    label: str
+    target_label: str
+    direction: LinkDirection | None
+    origins: tuple[str, ...]
+    constrained: bool
+    analysis_jobs: tuple[AnalysisJobDefinition, ...] = ()
+
+
+@dataclass(frozen=True)
+class NodeRelationship:
+    """
+    One relationship as seen from a specific node label.
+
+    ``other_label`` keeps the opposite endpoint as declared on the underlying
+    ``Relationship``. When this view is inherited from a semantic label the
+    concrete carries, that far endpoint stays semantic (for example
+    ``RESOLVED_IMAGE`` → ``Image``) instead of expanding to every provider
+    concrete.
+    """
+
+    node_label: str
+    label: str
+    other_label: str
+    direction: LinkDirection | None
+    inherited: bool
+    relationship: Relationship
 
 
 @dataclass(frozen=True)
@@ -263,11 +315,16 @@ class DataModel:
     permission_relationships: tuple[PermissionRelationshipDefinition, ...] = ()
     ontology_semantic_labels: tuple[OntologySemanticLabel, ...] = ()
     ontology_relationship_constraints: tuple[OntologyRelationshipConstraint, ...] = ()
+    ontology_expected_edges: tuple[OntologyExpectedEdge, ...] = ()
     diagnostics: tuple[str, ...] = ()
     catalog_relationships: tuple[RelationshipCatalogDefinition, ...] = ()
 
     def get_node(self, label: str) -> Node | None:
         return next((node for node in self.nodes if node.label == label), None)
+
+    def relationships_for_node(self, label: str) -> tuple[NodeRelationship, ...]:
+        """Return relationships applicable to one node, including inherited ontology edges."""
+        return relationships_for_node(self, label)
 
     def for_module(self, module: str) -> DataModel:
         """
@@ -310,6 +367,9 @@ class DataModel:
             ),
             ontology_relationship_constraints=(
                 self.ontology_relationship_constraints if module == "ontology" else ()
+            ),
+            ontology_expected_edges=(
+                self.ontology_expected_edges if module == "ontology" else ()
             ),
             diagnostics=self.diagnostics,
         )
@@ -490,14 +550,19 @@ def relationships_for_module(
     other providers: several modules carry `DNSRecord`, so a one-sided match would
     document `(:DNSRecord)-[:DNS_POINTS_TO]->(:AWSEC2Instance)` on the GCP page.
 
-    Canonical ontology nodes are the documented exception. `User`, `Package` and friends
-    are defined once and link to every provider, so an edge between one of them and a
-    label the module carries belongs on the module's page even though the module never
-    declares the canonical side.
+    Ontology endpoints are the documented exception. Canonical nodes (`User`, `Package`)
+    and semantic labels (`Container`, `Image`) are defined once and link across
+    providers, so an edge between one of them and a label the module carries belongs
+    on the module's page even when the module never declares the ontology side. That
+    is what lets Kubernetes and Railway inherit ``RESOLVED_IMAGE → Image`` without
+    owning an Image concrete.
     """
     own_labels = {node.label for node in nodes}
     carried_labels = labels_carried_by(nodes)
-    canonical_labels = {node.label for node in all_nodes if "ontology" in node.modules}
+    ontology_endpoint_labels = {
+        *(node.label for node in all_nodes if "ontology" in node.modules),
+        *(label for node in all_nodes for label in node.ontology_labels),
+    }
 
     def qualifies(relationship: Relationship) -> bool:
         if module in relationship.modules:
@@ -508,7 +573,7 @@ def relationships_for_module(
         if all(endpoint in carried_labels for endpoint in endpoints):
             return True
         return any(
-            endpoint in carried_labels and other in canonical_labels
+            endpoint in carried_labels and other in ontology_endpoint_labels
             for endpoint, other in (endpoints, endpoints[::-1])
         )
 
@@ -521,6 +586,108 @@ def relationship_touches_node(relationship: Relationship, node: Node) -> bool:
     """Whether one node answers to either endpoint of a relationship."""
     carried = labels_carried_by((node,))
     return relationship.source_label in carried or relationship.target_label in carried
+
+
+def relationships_for_node(
+    model: DataModel,
+    label: str,
+) -> tuple[NodeRelationship, ...]:
+    """
+    Relationships applicable to one node label, including inherited ontology edges.
+
+    Direct edges keep their declared endpoints. Edges whose source or target is a
+    semantic/canonical ontology label that this node carries are projected onto the
+    concrete with the far endpoint left semantic. Validation-only
+    ``ontology_relationship_constraints`` are never included; only edges present in
+    ``model.relationships`` (schemas, matchlinks, analysis, catalogs, permissions)
+    participate.
+    """
+    node = _node_view_for_label(model, label)
+    if node is None:
+        return ()
+
+    # Inherit only through the primary label and ontology labels. Ordinary or
+    # compatibility extra labels must not pull in relationships declared against
+    # those aliases.
+    carried = {node.label, *node.ontology_labels}
+    views: dict[tuple[str, str, LinkDirection | None], NodeRelationship] = {}
+    for relationship in model.relationships:
+        matches_source = relationship.source_label in carried
+        matches_target = relationship.target_label in carried
+        if not matches_source and not matches_target:
+            continue
+
+        # Prefer the primary-label side when a node answers to both endpoints
+        # (self-loop or a node that also carries the far ontology label).
+        if matches_source and (
+            relationship.source_label == node.label or not matches_target
+        ):
+            other_label = relationship.target_label
+            direction = relationship.direction
+            inherited = relationship.source_label != node.label
+        else:
+            other_label = relationship.source_label
+            direction = _flip_direction(relationship.direction)
+            inherited = relationship.target_label != node.label
+
+        key = (relationship.label, other_label, direction)
+        existing = views.get(key)
+        if existing is not None and not existing.inherited:
+            # Keep a direct declaration over an inherited duplicate.
+            continue
+        if existing is not None and inherited:
+            continue
+        views[key] = NodeRelationship(
+            node_label=node.label,
+            label=relationship.label,
+            other_label=other_label,
+            direction=direction,
+            inherited=inherited,
+            relationship=relationship,
+        )
+
+    return tuple(
+        sorted(
+            views.values(),
+            key=lambda view: (
+                view.label,
+                view.other_label,
+                view.direction.name if view.direction else "",
+                view.inherited,
+            ),
+        )
+    )
+
+
+def _node_view_for_label(model: DataModel, label: str) -> Node | None:
+    """Resolve a primary node or a synthetic view of a semantic ontology label."""
+    node = model.get_node(label)
+    if node is not None:
+        return node
+    semantic = next(
+        (entry for entry in model.ontology_semantic_labels if entry.label == label),
+        None,
+    )
+    if semantic is None:
+        return None
+    return Node(
+        label=semantic.label,
+        descriptions=semantic.descriptions,
+        extra_labels=(),
+        conditional_labels=(),
+        properties=semantic.properties,
+        modules=("ontology",),
+        schemas=(),
+        ontology_labels=(semantic.label,),
+    )
+
+
+def _flip_direction(direction: LinkDirection | None) -> LinkDirection | None:
+    if direction is None:
+        return None
+    if direction is LinkDirection.OUTWARD:
+        return LinkDirection.INWARD
+    return LinkDirection.OUTWARD
 
 
 def iter_model_classes(
@@ -616,7 +783,8 @@ def iter_permission_relationships() -> Iterator[PermissionRelationshipDefinition
                 )
             target_label = raw_definition.get("target_label")
             relationship_name = raw_definition.get("relationship_name")
-            permissions = raw_definition.get("permissions")
+            permissions = raw_definition.get("permissions", [])
+            data_permissions = raw_definition.get("data_permissions", [])
             target_precondition = _parse_target_precondition(
                 raw_definition.get("target_precondition"),
                 relative_path,
@@ -626,7 +794,12 @@ def iter_permission_relationships() -> Iterator[PermissionRelationshipDefinition
                 not isinstance(target_label, str)
                 or not isinstance(relationship_name, str)
                 or not isinstance(permissions, list)
-                or not all(isinstance(permission, str) for permission in permissions)
+                or not isinstance(data_permissions, list)
+                or not (permissions or data_permissions)
+                or not all(
+                    isinstance(permission, str)
+                    for permission in permissions + data_permissions
+                )
             ):
                 raise ValueError(
                     f"Permission relationship file {relative_path} contains "
@@ -642,6 +815,7 @@ def iter_permission_relationships() -> Iterator[PermissionRelationshipDefinition
                         permissions=tuple(permissions),
                         config_path=relative_path.as_posix(),
                         target_precondition=target_precondition,
+                        data_permissions=tuple(data_permissions),
                     )
                 )
     yield from sorted(
@@ -709,6 +883,25 @@ def iter_relationship_catalog() -> Iterator[RelationshipCatalogDefinition]:
         )
         for resource in AWS_TAGGABLE_RESOURCES
     ]
+    definitions.extend(
+        RelationshipCatalogDefinition(
+            module="bbot",
+            source_label=source_label,
+            target_label=target_label,
+            relationship_name=relationship_name,
+            description=description,
+            properties=(
+                "firstseen",
+                "lastupdated",
+                "_sub_resource_label",
+                "_sub_resource_id",
+            ),
+            catalog_path=("cartography.models.bbot.events.BBOT_RELATIONSHIP_CATALOG"),
+        )
+        for source_label, relationship_name, target_label, description in (
+            BBOT_RELATIONSHIP_CATALOG
+        )
+    )
     definitions.extend(
         RelationshipCatalogDefinition(
             module="gcp",
@@ -897,6 +1090,12 @@ def build_data_model(
         )
         for constraint in ONTOLOGY_REL_CONSTRAINTS
     )
+    ontology_expected_edges = _build_ontology_expected_edges(
+        relationships,
+        ontology_semantic_labels,
+        nodes,
+        ontology_relationship_constraints,
+    )
     return DataModel(
         nodes=nodes,
         relationships=relationships,
@@ -905,7 +1104,63 @@ def build_data_model(
         catalog_relationships=catalog_relationship_definitions,
         ontology_semantic_labels=ontology_semantic_labels,
         ontology_relationship_constraints=ontology_relationship_constraints,
+        ontology_expected_edges=ontology_expected_edges,
         diagnostics=tuple(sorted(diagnostics)),
+    )
+
+
+def _build_ontology_expected_edges(
+    relationships: tuple[Relationship, ...],
+    ontology_semantic_labels: tuple[OntologySemanticLabel, ...],
+    nodes: tuple[Node, ...],
+    ontology_relationship_constraints: tuple[OntologyRelationshipConstraint, ...],
+) -> tuple[OntologyExpectedEdge, ...]:
+    """Collect relationships whose both endpoints are ontology labels."""
+    ontology_labels = {
+        *(semantic.label for semantic in ontology_semantic_labels),
+        *(node.label for node in nodes if "ontology" in node.modules),
+    }
+    constrained_keys = {
+        (constraint.source_label, constraint.label, constraint.target_label)
+        for constraint in ontology_relationship_constraints
+    }
+    expected: list[OntologyExpectedEdge] = []
+    for relationship in relationships:
+        if relationship.source_label not in ontology_labels:
+            continue
+        if relationship.target_label not in ontology_labels:
+            continue
+        key = (
+            relationship.source_label,
+            relationship.label,
+            relationship.target_label,
+        )
+        expected.append(
+            OntologyExpectedEdge(
+                source_label=relationship.source_label,
+                label=relationship.label,
+                target_label=relationship.target_label,
+                direction=relationship.direction,
+                origins=relationship.origins,
+                # RelConstraints describe outward edges only; an undirected
+                # materialized relationship does not satisfy them.
+                constrained=(
+                    key in constrained_keys
+                    and relationship.direction is LinkDirection.OUTWARD
+                ),
+                analysis_jobs=relationship.analysis_jobs,
+            )
+        )
+    return tuple(
+        sorted(
+            expected,
+            key=lambda edge: (
+                edge.source_label,
+                edge.label,
+                edge.target_label,
+                edge.direction.name if edge.direction else "",
+            ),
+        )
     )
 
 

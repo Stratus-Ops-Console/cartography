@@ -1,5 +1,4 @@
 import inspect
-import os
 from typing import Any
 from typing import Callable
 from typing import Dict
@@ -9,12 +8,14 @@ from unittest import mock
 import botocore.exceptions
 import neo4j
 from moto import mock_aws
+from pytest import mark
 from pytest import raises
 
 import cartography.config
 import cartography.intel.aws
 import cartography.util
 from cartography.intel.aws.resources import RESOURCE_FUNCTIONS
+from tests.integration.util import check_nodes
 
 # These unit tests are a sanity check for start*() and sync*() functions.
 
@@ -26,6 +27,10 @@ TEST_ACCOUNTS = {
 TEST_REGIONS = ["us-east-1", "us-west-2"]
 TEST_UPDATE_TAG = 123456789
 GRAPH_JOB_PARAMETERS = {"UPDATE_TAG": TEST_UPDATE_TAG}
+PUBLIC_SSM_JOB_PARAMETERS = {
+    **GRAPH_JOB_PARAMETERS,
+    "aws_ssm_public_parameter_prefix_allowlist": "/aws/service/bottlerocket/",
+}
 
 # https://stackoverflow.com/a/56687648 - Allows us to test the RESOURCE_FUNCTIONS table.
 AWS_RESOURCE_FUNCTIONS_STUB: Dict[str, Callable] = {
@@ -51,7 +56,7 @@ def test_sync_shared_public_ssm_parameters_unions_profile_regions(
         ["us-east-1", "us-west-2"],
         ["us-west-2", "eu-west-1"],
     ]
-    common_job_parameters = {"UPDATE_TAG": TEST_UPDATE_TAG}
+    common_job_parameters = PUBLIC_SSM_JOB_PARAMETERS.copy()
 
     # Act
     cartography.intel.aws._sync_shared_public_ssm_parameters(
@@ -103,7 +108,7 @@ def test_sync_shared_public_ssm_parameters_best_effort_skips_profile_setup_failu
         mock.MagicMock(),
         {"broken": "111111111111", "working": "222222222222"},
         ["ssm"],
-        {"UPDATE_TAG": TEST_UPDATE_TAG},
+        PUBLIC_SSM_JOB_PARAMETERS.copy(),
         configured_regions=None,
         aws_best_effort_mode=True,
     )
@@ -130,7 +135,7 @@ def test_sync_shared_public_ssm_parameters_fails_loudly_on_profile_setup_error(
             mock.MagicMock(),
             {"broken": "111111111111"},
             ["ssm"],
-            {"UPDATE_TAG": TEST_UPDATE_TAG},
+            PUBLIC_SSM_JOB_PARAMETERS.copy(),
             configured_regions=None,
             aws_best_effort_mode=False,
         )
@@ -152,12 +157,51 @@ def test_sync_shared_public_ssm_parameters_does_not_mask_unexpected_errors(
             mock.MagicMock(),
             {"default": "111111111111"},
             ["ssm"],
-            {"UPDATE_TAG": TEST_UPDATE_TAG},
+            PUBLIC_SSM_JOB_PARAMETERS.copy(),
             configured_regions=["us-east-1"],
             aws_best_effort_mode=True,
         )
 
     mock_sync_public_parameters.assert_called_once()
+
+
+@mock.patch.object(cartography.intel.aws.ssm_intel, "sync_public_parameters")
+@mock.patch.object(cartography.intel.aws, "_autodiscover_account_regions")
+@mock.patch.object(cartography.intel.aws, "_get_boto3_session_for_profile")
+@mark.parametrize("allowlist", [None, "", ","])
+def test_sync_shared_public_ssm_parameters_skips_aws_calls_when_disabled(
+    mock_get_session,
+    mock_autodiscover_regions,
+    mock_sync_public_parameters,
+    neo4j_session,
+    allowlist,
+):
+    # Arrange
+    common_job_parameters = {
+        "UPDATE_TAG": TEST_UPDATE_TAG,
+        "aws_ssm_public_parameter_prefix_allowlist": allowlist,
+    }
+
+    # Act
+    cartography.intel.aws._sync_shared_public_ssm_parameters(
+        neo4j_session,
+        mock.MagicMock(),
+        {"default": "111111111111"},
+        ["ssm"],
+        common_job_parameters,
+        configured_regions=None,
+        aws_best_effort_mode=False,
+    )
+
+    # Assert
+    mock_get_session.assert_not_called()
+    mock_autodiscover_regions.assert_not_called()
+    mock_sync_public_parameters.assert_called_once_with(
+        neo4j_session,
+        {},
+        TEST_UPDATE_TAG,
+        common_job_parameters,
+    )
 
 
 def make_aws_sync_test_kwargs(
@@ -200,6 +244,7 @@ def test_sync_multiple_accounts(
     mock_sync_orgs,
     neo4j_session,
 ):
+    mock_boto3_session.return_value.region_name = "us-east-1"
     call_order = []
     mock_sync_organizations_for_accounts.side_effect = (
         lambda *args, **kwargs: call_order.append("organizations") or []
@@ -660,6 +705,7 @@ def test_sync_multiple_accounts_single_profile_uses_profile_name(
     mock_sync_orgs,
     neo4j_session,
 ):
+    mock_boto3_session.return_value.region_name = "us-east-1"
     # Regression for #1142 and #1185: single explicit profile must not fall back to the default session.
     single_account = {"spoke1": "000000000099"}
 
@@ -708,6 +754,7 @@ def test_sync_multiple_accounts_default_path_uses_default_session(
     mock_sync_orgs,
     neo4j_session,
 ):
+    mock_boto3_session.return_value.region_name = "us-east-1"
     # Without --aws-sync-all-profiles the default session must be used (preserves #1042 fix for env-var-only creds).
     default_account = {"default": "000000000000"}
 
@@ -793,6 +840,90 @@ def test_sync_multiple_accounts_profile_session_is_usable(
     assert "Account" in identity
 
 
+@mock.patch.object(cartography.intel.aws, "_sync_one_account", return_value=None)
+@mock.patch.object(
+    cartography.intel.aws,
+    "_sync_aws_organizations_for_accounts",
+    return_value=[],
+)
+@mock.patch.object(cartography.intel.aws, "run_cleanup_job", return_value=None)
+def test_sync_multiple_accounts_govcloud_profile_root_principal(
+    mock_cleanup,
+    mock_sync_organizations_for_accounts,
+    mock_sync_one,
+    neo4j_session,
+    monkeypatch,
+    tmp_path,
+):
+    # A configured account whose profile is in a GovCloud region gets an aws-us-gov root
+    # principal, which matches the "arn:aws-us-gov:iam::<account>:root" in trust policies.
+    # Arrange
+    neo4j_session.run("MATCH (n:AWSRootPrincipal) DETACH DELETE n")
+    config_file = tmp_path / "config"
+    config_file.write_text("[profile example-gov]\nregion = us-gov-west-1\n")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config_file))
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    # Act
+    cartography.intel.aws._sync_multiple_accounts(
+        neo4j_session,
+        {"example-gov": "111122223333"},
+        TEST_UPDATE_TAG,
+        GRAPH_JOB_PARAMETERS,
+        aws_best_effort_mode=False,
+        use_explicit_profile=True,
+    )
+
+    # Assert
+    assert check_nodes(neo4j_session, "AWSRootPrincipal", ["arn"]) == {
+        ("arn:aws-us-gov:iam::111122223333:root",),
+    }
+
+
+@mock.patch.object(cartography.intel.aws, "_sync_one_account", return_value=None)
+@mock.patch.object(
+    cartography.intel.aws,
+    "_sync_aws_organizations_for_accounts",
+    return_value=[],
+)
+@mock.patch.object(cartography.intel.aws, "run_cleanup_job", return_value=None)
+def test_sync_multiple_accounts_root_principal_uses_aws_regions(
+    mock_cleanup,
+    mock_sync_organizations_for_accounts,
+    mock_sync_one,
+    neo4j_session,
+    monkeypatch,
+    tmp_path,
+):
+    # With --aws-regions set, iam.sync builds the root principal with the partition of
+    # those regions. The account loop must use the same partition even when the profile's
+    # region is in another one, or the account ends up with two root principals.
+    # Arrange
+    neo4j_session.run("MATCH (n:AWSRootPrincipal) DETACH DELETE n")
+    config_file = tmp_path / "config"
+    config_file.write_text("[profile example]\nregion = us-east-1\n")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config_file))
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    # Act
+    cartography.intel.aws._sync_multiple_accounts(
+        neo4j_session,
+        {"example": "111122223333"},
+        TEST_UPDATE_TAG,
+        GRAPH_JOB_PARAMETERS,
+        aws_best_effort_mode=False,
+        regions=["us-gov-west-1"],
+        use_explicit_profile=True,
+    )
+
+    # Assert
+    assert check_nodes(neo4j_session, "AWSRootPrincipal", ["arn"]) == {
+        ("arn:aws-us-gov:iam::111122223333:root",),
+    }
+
+
 @mock.patch("cartography.intel.aws.aioboto3.Session")
 @mock.patch("cartography.intel.aws.boto3.Session")
 @mock.patch("cartography.intel.aws.organizations")
@@ -811,8 +942,10 @@ def test_start_aws_ingestion(
     mock_boto3,
     mock_aioboto3,
     neo4j_session,
+    monkeypatch,
 ):
     # Arrange
+    monkeypatch.delenv("AWS_SSM_PUBLIC_PARAMETER_PREFIX_ALLOWLIST", raising=False)
     test_config = cartography.config.Config(
         neo4j_uri="bolt://localhost:7687",
         update_tag=TEST_UPDATE_TAG,
@@ -837,22 +970,17 @@ def test_start_aws_ingestion(
             "aws_cloudtrail_management_events_lookback_hours": test_config.aws_cloudtrail_management_events_lookback_hours,
             "experimental_aws_inspector_batch": test_config.experimental_aws_inspector_batch,
             "aws_tagging_api_cleanup_batch": test_config.aws_tagging_api_cleanup_batch,
-            "aws_ssm_public_parameter_prefix_allowlist": (
-                cartography.intel.aws.ssm_intel.DEFAULT_PUBLIC_PARAMETER_PREFIX_ALLOWLIST
-            ),
+            "aws_ssm_public_parameter_prefix_allowlist": "",
         },
     )
     mock_sync_shared_public_ssm_parameters.assert_called_once()
     shared_call_args = mock_sync_shared_public_ssm_parameters.call_args.args
     assert shared_call_args[0] is neo4j_session
     assert shared_call_args[3] == list(RESOURCE_FUNCTIONS.keys())
-    assert shared_call_args[4]["aws_ssm_public_parameter_prefix_allowlist"] == (
-        cartography.intel.aws.ssm_intel.DEFAULT_PUBLIC_PARAMETER_PREFIX_ALLOWLIST
-    )
+    assert shared_call_args[4]["aws_ssm_public_parameter_prefix_allowlist"] == ""
     assert shared_call_args[6] == test_config.aws_best_effort_mode
 
 
-@mock.patch.dict(os.environ, {}, clear=False)
 @mock.patch("cartography.intel.aws.aioboto3.Session")
 @mock.patch("cartography.intel.aws.boto3.Session")
 @mock.patch("cartography.intel.aws.organizations")
@@ -863,7 +991,7 @@ def test_start_aws_ingestion(
     return_value=None,
 )
 @mock.patch.object(cartography.intel.aws, "_perform_aws_analysis", return_value=None)
-def test_start_aws_ingestion_defaults_public_ssm_allowlist_when_unset(
+def test_start_aws_ingestion_uses_public_ssm_allowlist_from_environment(
     mock_perform_analysis,
     mock_sync_shared_public_ssm_parameters,
     mock_sync_multiple,
@@ -871,7 +999,12 @@ def test_start_aws_ingestion_defaults_public_ssm_allowlist_when_unset(
     mock_boto3,
     mock_aioboto3,
     neo4j_session,
+    monkeypatch,
 ):
+    monkeypatch.setenv(
+        "AWS_SSM_PUBLIC_PARAMETER_PREFIX_ALLOWLIST",
+        "/aws/service/bottlerocket/",
+    )
     test_config = cartography.config.Config(
         neo4j_uri="bolt://localhost:7687",
         update_tag=TEST_UPDATE_TAG,
@@ -884,7 +1017,7 @@ def test_start_aws_ingestion_defaults_public_ssm_allowlist_when_unset(
     common_job_parameters = mock_perform_analysis.call_args.args[2]
     assert (
         common_job_parameters["aws_ssm_public_parameter_prefix_allowlist"]
-        == cartography.intel.aws.ssm_intel.DEFAULT_PUBLIC_PARAMETER_PREFIX_ALLOWLIST
+        == "/aws/service/bottlerocket/"
     )
 
 
@@ -1001,9 +1134,13 @@ def test_start_aws_ingestion_passes_organization_account_ids(
 )
 @mock.patch.object(cartography.intel.aws, "_sync_one_account", return_value=None)
 @mock.patch.object(cartography.intel.aws, "_perform_aws_analysis", return_value=None)
+@mock.patch.object(
+    cartography.intel.aws.resourcegroupstaggingapi, "cleanup_orphan_tags"
+)
 @mock.patch.object(cartography.intel.aws, "run_cleanup_job")
 def test_start_aws_ingestion_raises_aggregated_exceptions_with_aws_best_effort_mode(
     mock_run_cleanup_job,
+    mock_cleanup_orphan_tags,
     mock_perform_analysis,
     mock_sync_one,
     mock_sync_organizations_for_accounts,
@@ -1013,6 +1150,7 @@ def test_start_aws_ingestion_raises_aggregated_exceptions_with_aws_best_effort_m
     neo4j_session,
 ):
     # Arrange
+    mock_boto3.return_value.region_name = "us-east-1"
     test_config = cartography.config.Config(
         neo4j_uri="bolt://localhost:7687",
         update_tag=TEST_UPDATE_TAG,
@@ -1037,6 +1175,7 @@ def test_start_aws_ingestion_raises_aggregated_exceptions_with_aws_best_effort_m
     assert mock_sync_one.call_count == 2
     assert mock_sync_organizations_for_accounts.call_count == 1
     assert mock_run_cleanup_job.call_count == 0
+    assert mock_cleanup_orphan_tags.call_count == 0
     assert mock_perform_analysis.call_count == 0
 
 
@@ -1050,9 +1189,13 @@ def test_start_aws_ingestion_raises_aggregated_exceptions_with_aws_best_effort_m
 )
 @mock.patch.object(cartography.intel.aws, "_sync_one_account", return_value=None)
 @mock.patch.object(cartography.intel.aws, "_perform_aws_analysis", return_value=None)
+@mock.patch.object(
+    cartography.intel.aws.resourcegroupstaggingapi, "cleanup_orphan_tags"
+)
 @mock.patch.object(cartography.intel.aws, "run_cleanup_job")
 def test_start_aws_ingestion_raises_one_exception_without_aws_best_effort_mode(
     mock_run_cleanup_job,
+    mock_cleanup_orphan_tags,
     mock_perform_analysis,
     mock_sync_one,
     mock_sync_organizations_for_accounts,
@@ -1062,6 +1205,7 @@ def test_start_aws_ingestion_raises_one_exception_without_aws_best_effort_mode(
     neo4j_session,
 ):
     # Arrange
+    mock_boto3.return_value.region_name = "us-east-1"
     test_config = cartography.config.Config(
         neo4j_uri="bolt://localhost:7687",
         update_tag=TEST_UPDATE_TAG,
@@ -1083,6 +1227,7 @@ def test_start_aws_ingestion_raises_one_exception_without_aws_best_effort_mode(
     assert mock_sync_one.call_count == 1
     assert mock_sync_organizations_for_accounts.call_count == 1
     assert mock_run_cleanup_job.call_count == 0
+    assert mock_cleanup_orphan_tags.call_count == 0
     assert mock_perform_analysis.call_count == 0
 
 
@@ -1096,9 +1241,13 @@ def test_start_aws_ingestion_raises_one_exception_without_aws_best_effort_mode(
 )
 @mock.patch.object(cartography.intel.aws, "_sync_one_account", return_value=None)
 @mock.patch.object(cartography.intel.aws, "_perform_aws_analysis", return_value=None)
+@mock.patch.object(
+    cartography.intel.aws.resourcegroupstaggingapi, "cleanup_orphan_tags"
+)
 @mock.patch.object(cartography.intel.aws, "run_cleanup_job")
 def test_start_aws_ingestion_does_cleanup(
     mock_run_cleanup_job,
+    mock_cleanup_orphan_tags,
     mock_perform_analysis,
     mock_sync_one,
     mock_sync_organizations_for_accounts,
@@ -1108,6 +1257,7 @@ def test_start_aws_ingestion_does_cleanup(
     neo4j_session,
 ):
     # Arrange
+    mock_boto3.return_value.region_name = "us-east-1"
     test_config = cartography.config.Config(
         neo4j_uri="bolt://localhost:7687",
         update_tag=TEST_UPDATE_TAG,
@@ -1124,7 +1274,51 @@ def test_start_aws_ingestion_does_cleanup(
     # Assert
     assert mock_perform_analysis.call_count == 1
     assert mock_run_cleanup_job.call_count == 1
+    assert mock_cleanup_orphan_tags.call_count == 1
     assert mock_sync_organizations_for_accounts.call_count == 1
+
+
+@mock.patch("cartography.intel.aws.aioboto3.Session")
+@mock.patch("cartography.intel.aws.boto3.Session")
+@mock.patch("cartography.intel.aws.organizations.get_aws_accounts_from_botocore_config")
+@mock.patch.object(
+    cartography.intel.aws,
+    "_sync_aws_organizations_for_accounts",
+    return_value=[],
+)
+@mock.patch.object(cartography.intel.aws, "_sync_one_account", return_value=None)
+@mock.patch.object(cartography.intel.aws, "_perform_aws_analysis", return_value=None)
+@mock.patch.object(
+    cartography.intel.aws.resourcegroupstaggingapi, "cleanup_orphan_tags"
+)
+@mock.patch.object(cartography.intel.aws, "run_cleanup_job")
+def test_start_aws_ingestion_skips_tag_orphan_cleanup_without_tagging_sync(
+    mock_run_cleanup_job,
+    mock_cleanup_orphan_tags,
+    mock_perform_analysis,
+    mock_sync_one,
+    mock_sync_organizations_for_accounts,
+    mock_get_aws_account,
+    mock_boto3,
+    mock_aioboto3,
+    neo4j_session,
+):
+    # Arrange
+    mock_boto3.return_value.region_name = "us-east-1"
+    test_config = cartography.config.Config(
+        neo4j_uri="bolt://localhost:7687",
+        update_tag=TEST_UPDATE_TAG,
+        aws_sync_all_profiles=True,
+        aws_requested_syncs="ec2:instance",
+    )
+    mock_get_aws_account.return_value = {"test_profile": "test_account"}
+
+    # Act
+    cartography.intel.aws.start_aws_ingestion(neo4j_session, test_config)
+
+    # Assert
+    assert mock_run_cleanup_job.call_count == 1
+    assert mock_cleanup_orphan_tags.call_count == 0
 
 
 @mock.patch("cartography.intel.aws.aioboto3.Session")
@@ -1140,9 +1334,11 @@ def test_start_aws_ingestion_does_cleanup(
     cartography.intel.aws, "_autodiscover_account_regions", return_value=TEST_REGIONS
 )
 @mock.patch.object(cartography.intel.aws, "run_cleanup_job", return_value=None)
+@mock.patch.object(cartography.util, "run_typed_analysis_job", return_value=None)
 @mock.patch.object(cartography.intel.aws, "run_typed_analysis_job", return_value=None)
 def test_sync_one_account_all_sync_functions(
     mock_analysis,
+    mock_guarded_analysis,
     mock_cleanup,
     mock_autodiscover,
     mock_perm_rels,
@@ -1182,9 +1378,10 @@ def test_sync_one_account_all_sync_functions(
     # Check that the boilerplate functions get called as expected. Brittle, but a good sanity check.
     assert mock_autodiscover.call_count == 0
     assert mock_cleanup.call_count == 0
-    # Per-account typed analysis jobs: AWS_EC2_IAM_INSTANCE_PROFILE, AWS_LAMBDA_ECR, AWS_LB_NACL_DIRECT.
-    # (AWS_LB_CONTAINER_EXPOSURE runs in the cross-account _perform_aws_analysis phase instead.)
-    assert mock_analysis.call_count == 3
+    # All dependencies are present, so both guarded analyses reach the executor.
+    assert mock_guarded_analysis.call_count == 2
+    # LB/NACL runs directly after its explicit dependency check.
+    assert mock_analysis.call_count == 1
 
 
 def test_sync_one_account_uses_owned_ecr_session_factory(
@@ -1279,7 +1476,8 @@ def test_sync_one_account_just_iam_rels_and_tags(
     # _sync_one_account() above did not specify regions, so we expect 1 call to _autodiscover_account_regions().
     assert mock_autodiscover.call_count == 1
     assert mock_cleanup.call_count == 0
-    assert mock_analysis.call_count == 2
+    # The selected modules do not satisfy any per-account analysis dependencies.
+    assert mock_analysis.call_count == 0
 
 
 def test_standardize_aws_sync_kwargs():

@@ -43,6 +43,7 @@ def test_sync_nodes_and_runs_on(neo4j_session, monkeypatch):
                             resources=None,
                             env=None,
                             env_from=None,
+                            volume_mounts=None,
                         ),
                     ],
                     volumes=[],
@@ -54,7 +55,7 @@ def test_sync_nodes_and_runs_on(neo4j_session, monkeypatch):
         ],
     )
 
-    client = SimpleNamespace(name=CLUSTER_NAME)
+    client = SimpleNamespace(name=CLUSTER_NAME, gke_cluster=None)
     common_job_parameters = {"UPDATE_TAG": TEST_UPDATE_TAG, "CLUSTER_ID": CLUSTER_ID}
 
     # Arrange: the backing EC2 instance must already exist for the IS_INSTANCE
@@ -80,6 +81,14 @@ def test_sync_nodes_and_runs_on(neo4j_session, monkeypatch):
     assert check_nodes(neo4j_session, "KubernetesNode", ["name"]) == {
         ("my-node",),
         ("my-arm-node",),
+    }
+    assert check_nodes(
+        neo4j_session,
+        "KubernetesNode",
+        ["name", "gpu_capacity", "gpu_allocatable", "gpu_product"],
+    ) == {
+        ("my-node", 8, 8, "NVIDIA-H200"),
+        ("my-arm-node", None, None, None),
     }
 
     # Assert: pod is linked to its scheduled node

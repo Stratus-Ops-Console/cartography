@@ -36,10 +36,25 @@ class ModalFunctionNodeProperties(CartographyNodeProperties):
         extra_index=True,
         description="Public URL if this is a web endpoint, else null. Protection status is unknowable, see above.",
     )
+    web_hostname: PropertyRef = PropertyRef(
+        "web_hostname",
+        extra_index=True,
+        description="Canonical hostname extracted from the public web URL.",
+    )
     is_web_endpoint: PropertyRef = PropertyRef(
         "is_web_endpoint",
         extra_index=True,
         description="Whether the function is exposed over HTTP.",
+    )
+    exposed_internet: PropertyRef = PropertyRef(
+        "exposed_internet",
+        extra_index=True,
+        description="`True` when the function is a web endpoint. Whether it requires auth is unknowable, since Modal's `requires_proxy_auth` is write-only, so this is the conservative reading.",
+    )
+    exposed_internet_type: PropertyRef = PropertyRef(
+        "exposed_internet_type",
+        extra_index=True,
+        description="How it is exposed. Always `direct`, since the web URL is on the function itself.",
     )
     # Raw FUNCTION_TYPE_* value.
     function_type: PropertyRef = PropertyRef(

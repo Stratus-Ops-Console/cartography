@@ -103,6 +103,12 @@ _duo_phone_posture_gaps = Fact(
     cypher_query="""
     MATCH (phone:DuoPhone)
     OPTIONAL MATCH (user:DuoUser)-[:HAS_DUO_PHONE]->(phone)
+    WITH phone, coalesce(user.email, user.username) AS user_label
+    ORDER BY user_label
+    // A Duo phone can be enrolled by several users. The finding is about the device,
+    // so collapse them to one deterministic label: keeping the fan-out would emit one
+    // duplicate finding per user for the same (device_id, issue).
+    WITH phone, head(collect(user_label)) AS user
     WITH phone, user,
         [
             issue IN [
@@ -116,7 +122,7 @@ _duo_phone_posture_gaps = Fact(
         'duo' AS provider,
         phone.id AS device_id,
         coalesce(phone.name, phone.model, phone.id) AS device_name,
-        coalesce(user.email, user.username) AS user,
+        user,
         phone.platform AS platform,
         issue[0] AS issue,
         issue[1] AS current_value
@@ -230,6 +236,29 @@ _jamf_mobile_device_posture_gaps = Fact(
 )
 
 
+# A machine can hold several live registrations under one hostname: a node that
+# re-registers (an ephemeral node reconnecting, a re-created host) keeps its old
+# registration until that expires. Facts keyed on hostname take the most recently
+# seen one, so the machine gets one finding and it reflects its current state.
+LATEST_TAILSCALE_DEVICE_PER_HOSTNAME = """
+    MATCH (tailnet:TailscaleTailnet)-[:RESOURCE]->(registration:TailscaleDevice)
+    WITH tailnet, registration,
+        coalesce(registration.hostname, registration.name, registration.id) AS hostname
+    ORDER BY coalesce(registration.last_seen, '') DESC, registration.id
+    WITH tailnet, hostname, collect(registration.id)[0] AS current_registration_id
+    MATCH (tailnet)-[:RESOURCE]->(device:TailscaleDevice {id: current_registration_id})
+"""
+# The compliance denominator counts machines the same way: one current registration
+# per tailnet and hostname. Counting that node, rather than a (tailnet, hostname)
+# pair, keeps the count scopable by consumers that narrow it to a set of assets.
+TAILSCALE_HOSTNAME_COUNT = (
+    LATEST_TAILSCALE_DEVICE_PER_HOSTNAME
+    + """
+    RETURN COUNT(DISTINCT device) AS count
+"""
+)
+
+
 _tailscale_device_posture_gaps = Fact(
     id="tailscale_device_posture_gaps",
     name="Tailscale devices with data protection gaps",
@@ -237,8 +266,8 @@ _tailscale_device_posture_gaps = Fact(
         "Detects Tailscale devices with explicit encryption or firewall posture "
         "failures from Tailscale device posture data."
     ),
-    cypher_query="""
-    MATCH (tailnet:TailscaleTailnet)-[:RESOURCE]->(device:TailscaleDevice)
+    cypher_query=LATEST_TAILSCALE_DEVICE_PER_HOSTNAME
+    + """
     OPTIONAL MATCH (user:TailscaleUser)-[:OWNS]->(device)
     WITH tailnet, device, user,
         [
@@ -278,10 +307,7 @@ _tailscale_device_posture_gaps = Fact(
        OR device.posture_intune_is_encrypted = false
     RETURN device
     """,
-    cypher_count_query="""
-    MATCH (device:TailscaleDevice)
-    RETURN COUNT(device) AS count
-    """,
+    cypher_count_query=TAILSCALE_HOSTNAME_COUNT,
     asset_label="TailscaleDevice",
     asset_id_field="device_id",
     # Key on tailnet + stable hostname, not device.id: Tailscale ephemeral nodes get
@@ -301,12 +327,17 @@ _duo_phone_malware_protection_gaps = Fact(
     MATCH (device:DuoPhone)
     WHERE device.tampered = true
     OPTIONAL MATCH (user:DuoUser)-[:HAS_DUO_PHONE]->(device)
+    WITH device, coalesce(user.email, user.username) AS user_label
+    ORDER BY user_label
+    // See _duo_phone_posture_gaps: a phone can be enrolled by several users, so keep
+    // one deterministic label rather than one finding per user.
+    WITH device, head(collect(user_label)) AS user
     RETURN
         'duo' AS provider,
         device.id AS device_id,
         device.id AS stable_device_id,
         coalesce(device.name, device.model, device.id) AS device_name,
-        coalesce(user.email, user.username) AS user,
+        user,
         device.platform AS platform,
         'device_tampered' AS issue,
         toString(device.tampered) AS current_value
@@ -527,8 +558,9 @@ _device_update_gaps = Fact(
     id="device_update_gaps",
     name="Devices with available security updates",
     description="Detects Tailscale devices with an explicitly available update.",
-    cypher_query="""
-    MATCH (tailnet:TailscaleTailnet)-[:RESOURCE]->(device:TailscaleDevice)
+    cypher_query=LATEST_TAILSCALE_DEVICE_PER_HOSTNAME
+    + """
+    WITH tailnet, device
     WHERE device.update_available = true
     OPTIONAL MATCH (user:TailscaleUser)-[:OWNS]->(device)
     RETURN
@@ -546,10 +578,7 @@ _device_update_gaps = Fact(
     WHERE device.update_available = true
     RETURN device
     """,
-    cypher_count_query="""
-    MATCH (device:TailscaleDevice)
-    RETURN COUNT(device) AS count
-    """,
+    cypher_count_query=TAILSCALE_HOSTNAME_COUNT,
     asset_label="TailscaleDevice",
     asset_id_field="device_id",
     identity_fields=("tailnet_id", "device_name", "issue"),
@@ -709,6 +738,53 @@ _tailscale_device_management_gaps = Fact(
 )
 
 
+_defender_machine_management_gaps = Fact(
+    id="defender_machine_management_gaps",
+    name="Defender for Endpoint machines without Intune enrollment",
+    description=(
+        "Detects machines that are onboarded to Microsoft Defender for Endpoint "
+        "and actively reporting, but have no Intune managed device record in a "
+        "tenant that uses Intune. Machines managed by another MDM also match, "
+        "and so do machines that Defender reports without an Entra device ID, "
+        "because that ID is the only key that links a machine to Intune."
+    ),
+    # Requiring Intune data in the tenant keeps a missing Intune dataset, such as
+    # an ungranted DeviceManagementManagedDevices.Read.All permission, from
+    # flagging every Defender machine.
+    cypher_query="""
+    MATCH (tenant:AzureTenant)-[:RESOURCE]->(device:DefenderMachine)
+    WHERE device.onboarding_status = 'Onboarded'
+      AND device.health_status = 'Active'
+      AND NOT (device)-[:ASSOCIATED_WITH]->(:IntuneManagedDevice)
+      AND EXISTS { MATCH (tenant)-[:RESOURCE]->(:IntuneManagedDevice) }
+    RETURN
+        'microsoft' AS provider,
+        device.id AS device_id,
+        device.id AS stable_device_id,
+        coalesce(device.computer_dns_name, device.machine_id) AS device_name,
+        device.os_platform AS platform,
+        'not_enrolled_in_intune' AS issue
+    """,
+    cypher_visual_query="""
+    MATCH (tenant:AzureTenant)-[:RESOURCE]->(device:DefenderMachine)
+    WHERE device.onboarding_status = 'Onboarded'
+      AND device.health_status = 'Active'
+      AND NOT (device)-[:ASSOCIATED_WITH]->(:IntuneManagedDevice)
+      AND EXISTS { MATCH (tenant)-[:RESOURCE]->(:IntuneManagedDevice) }
+    RETURN tenant, device
+    """,
+    cypher_count_query="""
+    MATCH (device:DefenderMachine)
+    RETURN COUNT(device) AS count
+    """,
+    asset_label="DefenderMachine",
+    asset_id_field="device_id",
+    identity_fields=("device_id", "issue"),
+    module=Module.MICROSOFT,
+    maturity=Maturity.EXPERIMENTAL,
+)
+
+
 device_security_posture_gaps = Rule(
     id="device_security_posture_gaps",
     name="Device Data Protection Gaps",
@@ -726,7 +802,7 @@ device_security_posture_gaps = Rule(
         _tailscale_device_posture_gaps,
     ),
     tags=("device", "endpoint", "encryption", "compliance", "stride:tampering"),
-    version="0.3.0",
+    version="0.3.2",
     frameworks=(
         iso27001_annex_a("8.1"),
         iso27001_annex_a("8.9"),
@@ -752,7 +828,7 @@ device_malware_protection_gaps = Rule(
         _tailscale_device_malware_protection_gaps,
     ),
     tags=("device", "endpoint", "malware", "edr", "stride:tampering"),
-    version="0.1.0",
+    version="0.1.1",
     frameworks=(
         iso27001_annex_a("8.1"),
         iso27001_annex_a("8.8"),
@@ -775,7 +851,7 @@ device_update_gaps = Rule(
     output_model=DeviceSecurityPostureGapOutput,
     facts=(_device_update_gaps,),
     tags=("device", "endpoint", "patching", "vulnerability"),
-    version="0.1.0",
+    version="0.1.1",
     frameworks=(
         iso27001_annex_a("8.1"),
         iso27001_annex_a("8.8"),
@@ -789,16 +865,18 @@ device_management_gaps = Rule(
     name="Device Management Gaps",
     description=(
         "Detects devices that are explicitly unmanaged, unsupervised, lack MDM "
-        "approval, or are noncompliant according to their management provider."
+        "approval, or are noncompliant according to their management provider, "
+        "and Defender for Endpoint machines with no Intune enrollment."
     ),
     output_model=DeviceSecurityPostureGapOutput,
     facts=(
         _jamf_computer_management_gaps,
         _jamf_mobile_device_management_gaps,
         _tailscale_device_management_gaps,
+        _defender_machine_management_gaps,
     ),
     tags=("device", "endpoint", "mdm", "compliance"),
-    version="0.1.0",
+    version="0.2.0",
     frameworks=(
         iso27001_annex_a("8.1"),
         iso27001_annex_a("8.9"),

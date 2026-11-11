@@ -28,6 +28,15 @@ _SEMGREP_SEVERITY = {
     "CRITICAL": "critical",
 }
 
+# BBOT finding severity
+_BBOT_SEVERITY = {
+    "INFO": "info",
+    "LOW": "low",
+    "MEDIUM": "medium",
+    "HIGH": "high",
+    "CRITICAL": "critical",
+}
+
 # Socket.dev alert severity
 _SOCKETDEV_SEVERITY = {
     "low": "low",
@@ -66,6 +75,64 @@ _SOCKETDEV_STATUS = {
     "cleared": "ignored",
 }
 
+bbot_mapping = OntologyMapping(
+    module_name="bbot",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="BbotFinding",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="title",
+                    node_field="finding_name",
+                    required=True,
+                ),
+                OntologyFieldMapping(
+                    ontology_field="severity",
+                    node_field="severity",
+                    special_handling="mapping",
+                    extra={"map": _BBOT_SEVERITY},
+                ),
+            ],
+        ),
+    ],
+)
+
+# Wiz issue and finding severity/status.
+_WIZ_SEVERITY = {
+    "NONE": "info",
+    "INFORMATIONAL": "info",
+    "LOW": "low",
+    "MEDIUM": "medium",
+    "HIGH": "high",
+    "CRITICAL": "critical",
+}
+_WIZ_STATUS = {
+    "OPEN": "open",
+    "IN_PROGRESS": "open",
+    "RESOLVED": "fixed",
+    "REJECTED": "ignored",
+}
+
+# Orca alert severity and workflow status. Unknown severities intentionally stay
+# unmapped rather than being presented as informational findings.
+_ORCA_ALERT_SEVERITY = {
+    "critical": "critical",
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+    "CRITICAL": "critical",
+    "HIGH": "high",
+    "MEDIUM": "medium",
+    "LOW": "low",
+}
+# Closed and dismissed alerts are not ingested.
+_ORCA_ALERT_STATUS = {
+    "open": "open",
+    "in_progress": "open",
+    "OPEN": "open",
+    "IN_PROGRESS": "open",
+}
+
 aws_mapping = OntologyMapping(
     module_name="aws",
     nodes=[
@@ -101,6 +168,33 @@ semgrep_mapping = OntologyMapping(
     nodes=[
         OntologyNodeMapping(
             node_label="SemgrepSASTFinding",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="title",
+                    node_field="title",
+                    required=True,
+                ),
+                OntologyFieldMapping(
+                    ontology_field="severity",
+                    node_field="severity",
+                    special_handling="mapping",
+                    extra={"map": _SEMGREP_SEVERITY},
+                ),
+                OntologyFieldMapping(
+                    ontology_field="status",
+                    node_field="state",
+                    special_handling="mapping",
+                    extra={"map": _SEMGREP_SAST_STATUS},
+                ),
+                OntologyFieldMapping(
+                    ontology_field="first_seen",
+                    node_field="opened_at",
+                ),
+            ],
+        ),
+        # SemgrepAISASTFinding mirrors SemgrepSASTFinding; `state` shares the same vocabulary.
+        OntologyNodeMapping(
+            node_label="SemgrepAISASTFinding",
             fields=[
                 OntologyFieldMapping(
                     ontology_field="title",
@@ -246,6 +340,120 @@ socketdev_mapping = OntologyMapping(
     ],
 )
 
+wiz_mapping = OntologyMapping(
+    module_name="wiz",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="WizIssue",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="title", node_field="name", required=True
+                ),
+                OntologyFieldMapping(
+                    ontology_field="severity",
+                    node_field="severity",
+                    special_handling="mapping",
+                    extra={"map": _WIZ_SEVERITY},
+                ),
+                OntologyFieldMapping(ontology_field="type", node_field="issue_type"),
+                OntologyFieldMapping(
+                    ontology_field="status",
+                    node_field="status",
+                    special_handling="mapping",
+                    extra={"map": _WIZ_STATUS},
+                ),
+                OntologyFieldMapping(
+                    ontology_field="first_seen", node_field="created_at"
+                ),
+            ],
+        ),
+        OntologyNodeMapping(
+            node_label="WizFinding",
+            fields=[
+                # Wiz findings are either CVE-backed vulnerabilities or non-CVE
+                # security issues. The resolver returns this mapping by primary
+                # label, so it carries fields for both conditional ontology labels.
+                OntologyFieldMapping(
+                    ontology_field="title", node_field="name", required=True
+                ),
+                OntologyFieldMapping(
+                    ontology_field="severity",
+                    node_field="severity",
+                    special_handling="mapping",
+                    extra={"map": _WIZ_SEVERITY},
+                ),
+                OntologyFieldMapping(ontology_field="type", node_field="finding_type"),
+                OntologyFieldMapping(
+                    ontology_field="status",
+                    node_field="status",
+                    special_handling="mapping",
+                    extra={"map": _WIZ_STATUS},
+                ),
+                OntologyFieldMapping(
+                    ontology_field="first_seen",
+                    node_field="first_seen_at",
+                    special_handling="coalesce",
+                    extra={"fields": ["first_detected_at", "created_at"]},
+                ),
+                OntologyFieldMapping(ontology_field="cve_id", node_field="cve_id"),
+                OntologyFieldMapping(
+                    ontology_field="description",
+                    node_field="cve_description",
+                    indexed=False,
+                ),
+                OntologyFieldMapping(ontology_field="base_score", node_field="score"),
+                OntologyFieldMapping(
+                    ontology_field="base_severity",
+                    node_field="cvss_severity",
+                    special_handling="mapping",
+                    extra={"map": _WIZ_SEVERITY},
+                ),
+                OntologyFieldMapping(
+                    ontology_field="exploitability_score",
+                    node_field="exploitability_score",
+                ),
+                OntologyFieldMapping(
+                    ontology_field="impact_score", node_field="impact_score"
+                ),
+            ],
+        ),
+    ],
+)
+
+orca_mapping = OntologyMapping(
+    module_name="orca",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="OrcaAlert",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="title", node_field="title", required=True
+                ),
+                OntologyFieldMapping(
+                    ontology_field="severity",
+                    node_field="severity",
+                    special_handling="mapping",
+                    extra={"map": _ORCA_ALERT_SEVERITY},
+                ),
+                OntologyFieldMapping(
+                    ontology_field="type",
+                    node_field="alert_type",
+                ),
+                OntologyFieldMapping(
+                    ontology_field="status",
+                    node_field="status",
+                    special_handling="mapping",
+                    extra={"map": _ORCA_ALERT_STATUS},
+                ),
+                OntologyFieldMapping(
+                    ontology_field="first_seen",
+                    node_field="created_at",
+                ),
+            ],
+        ),
+    ],
+)
+
 azure_mapping = OntologyMapping(
     module_name="azure",
     nodes=[
@@ -293,10 +501,115 @@ supabase_mapping = OntologyMapping(
     ],
 )
 
+# Huntress incident report severity. Huntress has no informational or medium band.
+_HUNTRESS_INCIDENT_SEVERITY = {
+    "low": "low",
+    "high": "high",
+    "critical": "critical",
+}
+
+# Huntress incident report `status`. The full set comes from the endpoint's filter enum,
+# which is wider than the three values the field description lists. The generated CASE
+# has no ELSE, so an unenumerated value would normalize to null.
+_HUNTRESS_INCIDENT_STATUS = {
+    # Delivered to the customer and still actionable.
+    "sent": "open",
+    # Huntress is applying remediations; the incident is not resolved yet.
+    "auto_remediating": "open",
+    "closed": "fixed",
+    "dismissed": "ignored",
+    "partner_dismissed": "ignored",
+    "deleting": "ignored",
+}
+
+huntress_mapping = OntologyMapping(
+    module_name="huntress",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="HuntressIncidentReport",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="title", node_field="subject", required=True
+                ),
+                OntologyFieldMapping(
+                    ontology_field="severity",
+                    node_field="severity",
+                    special_handling="mapping",
+                    extra={"map": _HUNTRESS_INCIDENT_SEVERITY},
+                ),
+                OntologyFieldMapping(
+                    ontology_field="status",
+                    node_field="status",
+                    special_handling="mapping",
+                    extra={"map": _HUNTRESS_INCIDENT_STATUS},
+                ),
+                # first_seen: left unmapped. An incident report carries no detection or
+                # creation timestamp; the only candidate, `sent_at`, is when a SOC
+                # analyst notified the customer, which is strictly later than first
+                # observation. Mapping it would skew any cross-provider finding-age
+                # query, so the raw value stays on `sent_at` alone.
+                # The `type` field is left unmapped: `indicator_types` is a list of the
+                # threat indicators found, so it does not reduce to the single
+                # categorical value the canonical field carries.
+            ],
+        ),
+    ],
+)
+
+microsoft_mapping = OntologyMapping(
+    module_name="microsoft",
+    nodes=[
+        OntologyNodeMapping(
+            node_label="DefenderAlert",
+            fields=[
+                OntologyFieldMapping(
+                    ontology_field="title", node_field="title", required=True
+                ),
+                OntologyFieldMapping(
+                    ontology_field="severity",
+                    node_field="severity",
+                    special_handling="mapping",
+                    extra={
+                        "map": {
+                            "informational": "info",
+                            "low": "low",
+                            "medium": "medium",
+                            "high": "high",
+                        }
+                    },
+                ),
+                OntologyFieldMapping(
+                    ontology_field="status",
+                    node_field="status",
+                    special_handling="mapping",
+                    extra={
+                        "map": {
+                            "new": "open",
+                            "inProgress": "open",
+                            "resolved": "fixed",
+                        }
+                    },
+                ),
+                OntologyFieldMapping(
+                    ontology_field="type", node_field="detection_source"
+                ),
+                OntologyFieldMapping(
+                    ontology_field="first_seen", node_field="created_date_time"
+                ),
+            ],
+        ),
+    ],
+)
+
 SECURITY_ISSUES_ONTOLOGY_MAPPING: dict[str, OntologyMapping] = {
+    "bbot": bbot_mapping,
+    "huntress": huntress_mapping,
+    "microsoft": microsoft_mapping,
     "aws": aws_mapping,
     "semgrep": semgrep_mapping,
     "socketdev": socketdev_mapping,
+    "wiz": wiz_mapping,
+    "orca": orca_mapping,
     "azure": azure_mapping,
     "supabase": supabase_mapping,
 }

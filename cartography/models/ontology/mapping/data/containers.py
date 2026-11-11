@@ -212,21 +212,25 @@ _RAILWAY_DEPLOYMENT_STATE = {
 
 # A Railway deployment is one concrete running revision of a service instance, the same
 # role GCPCloudRunServiceContainer plays for a Cloud Run service. Railway exposes no name,
-# image reference, resource limits or health probe on the deployment itself - the image
-# lives on the parent RailwayServiceInstance - so only the lifecycle state is mapped.
+# resource limits, region or health probe on the deployment itself. Deployment metadata does
+# provide the runtime image reference and digest when Railway can resolve them.
 railway_mapping = OntologyMapping(
     module_name="railway",
     nodes=[
         OntologyNodeMapping(
             node_label="RailwayDeployment",
             fields=[
+                OntologyFieldMapping(ontology_field="image", node_field="source_image"),
+                OntologyFieldMapping(
+                    ontology_field="image_digest", node_field="image_digest"
+                ),
                 OntologyFieldMapping(
                     ontology_field="state",
                     node_field="status",
                     special_handling="mapping",
                     extra={"map": _RAILWAY_DEPLOYMENT_STATE},
                 ),
-                # name / image / image_digest / cpu / memory / region / health_status:
+                # name / cpu / memory / region / health_status:
                 # Not available on Railway's Deployment type.
             ],
         ),
@@ -277,6 +281,18 @@ modal_mapping = OntologyMapping(
     ],
 )
 
+# Snowpark Container Services container status.
+_SNOWFLAKE_CONTAINER_STATE = {
+    "RUNNING": "running",
+    "PENDING": "pending",
+    "STARTING": "pending",
+    "TERMINATING": "stopping",
+    "TERMINATED": "terminated",
+    "DONE": "terminated",
+    "FAILED": "error",
+    "UNKNOWN": "unknown",
+}
+
 CONTAINER_ONTOLOGY_MAPPING: dict[str, OntologyMapping] = {
     "aws_ecs_container": aws_ecs_container_mapping,
     "kubernetes": kubernetes_mapping,
@@ -285,4 +301,20 @@ CONTAINER_ONTOLOGY_MAPPING: dict[str, OntologyMapping] = {
     "scaleway": scaleway_mapping,
     "railway": railway_mapping,
     "modal": modal_mapping,
+    "snowflake": OntologyMapping(
+        module_name="snowflake",
+        nodes=[
+            OntologyNodeMapping(
+                node_label="SnowflakeServiceContainer",
+                fields=[
+                    OntologyFieldMapping(
+                        ontology_field="state",
+                        node_field="status",
+                        special_handling="mapping",
+                        extra={"map": _SNOWFLAKE_CONTAINER_STATE},
+                    ),
+                ],
+            ),
+        ],
+    ),
 }

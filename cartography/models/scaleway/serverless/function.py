@@ -31,8 +31,23 @@ class ScalewayServerlessFunctionProperties(CartographyNodeProperties):
         "privacy",
         description="Invocation privacy (`public` allows unauthenticated invokes, `private` requires a token).",
     )
+    exposed_internet: PropertyRef = PropertyRef(
+        "exposed_internet",
+        extra_index=True,
+        description="`True` when `privacy` is `public`, meaning the invocation domain answers without a token.",
+    )  # Set in transform(), see cartography/intel/scaleway/serverless/functions.py
+    exposed_internet_type: PropertyRef = PropertyRef(
+        "exposed_internet_type",
+        extra_index=True,
+        description="How it is exposed. Always `direct`.",
+    )  # Set in transform(), see cartography/intel/scaleway/serverless/functions.py
     domain_name: PropertyRef = PropertyRef(
         "domain_name", extra_index=True, description="Auto-assigned invocation domain."
+    )
+    domain_name_normalized: PropertyRef = PropertyRef(
+        "domain_name_normalized",
+        extra_index=True,
+        description="Canonical auto-assigned invocation hostname.",
     )
     # `enabled` allows plain HTTP; `redirected` forces HTTPS.
     http_option: PropertyRef = PropertyRef(

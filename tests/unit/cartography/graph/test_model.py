@@ -8,13 +8,14 @@ import pytest
 import cartography.models
 from cartography.intel.aws.label_migrations import AWS_LABEL_MIGRATIONS
 from cartography.models.core.common import PropertyRef
-from cartography.models.core.nodes import CartographyNodeProperties
-from cartography.models.core.nodes import CartographyNodeSchema
-from cartography.models.core.relationships import CartographyRelProperties
 from cartography.models.core.relationships import CartographyRelSchema
 from cartography.models.core.relationships import LinkDirection
 from cartography.models.core.relationships import make_target_node_matcher
 from cartography.models.core.relationships import MatchLinkSubResource
+from tests.utils import is_node_properties
+from tests.utils import is_node_schema
+from tests.utils import is_rel_properties
+from tests.utils import is_rel_schema
 from tests.utils import load_models
 
 logger = logging.getLogger(__name__)
@@ -71,22 +72,22 @@ def test_model_objects_naming_convention():
     """Test that all model objects follow the naming convention."""
     errors: List[str] = []
     for module_name, element in load_models(cartography.models):
-        if issubclass(element, CartographyNodeSchema):
+        if is_node_schema(element):
             if not element.__name__.endswith("Schema"):
                 errors.append(f"Node {element.__name__}: name must end with 'Schema'.")
-        elif issubclass(element, CartographyRelSchema):
+        elif is_rel_schema(element):
             if not element.__name__.endswith("Rel") and not element.__name__.endswith(
                 "MatchLink"
             ):
                 errors.append(
                     f"Relationship {element.__name__}: name must end with 'Rel' or 'MatchLink'."
                 )
-        elif issubclass(element, CartographyNodeProperties):
+        elif is_node_properties(element):
             if not element.__name__.endswith("Properties"):
                 errors.append(
                     f"Node properties {element.__name__}: name must end with 'Properties'."
                 )
-        elif issubclass(element, CartographyRelProperties):
+        elif is_rel_properties(element):
             if not element.__name__.endswith(
                 "RelProperties"
             ) and not element.__name__.endswith("MatchLinkProperties"):
@@ -102,7 +103,7 @@ def test_microsoft_tenant_relationships_target_azure_tenant():
     for module_name, element in load_models(cartography.models):
         if not module_name.startswith("cartography.models.microsoft"):
             continue
-        if not issubclass(element, CartographyRelSchema):
+        if not is_rel_schema(element):
             continue
 
         relationship = element()
@@ -120,14 +121,22 @@ def test_microsoft_tenant_relationships_target_azure_tenant():
     )
 
 
+# `Ip` is a provider-neutral label for an address that a DNS name resolves to, shared with the
+# nodes other modules label `Ip`.
+AWS_UNPREFIXED_NODE_LABELS: Set[str] = {"Ip"}
+
+
 def test_aws_primary_node_labels_use_provider_prefix():
     errors: List[str] = []
     for module_name, element in load_models(cartography.models):
         if module_name != "cartography.models.aws":
             continue
-        if not issubclass(element, CartographyNodeSchema):
+        if not is_node_schema(element):
             continue
-        if element.label.startswith("AWS"):
+        if (
+            element.label.startswith("AWS")
+            or element.label in AWS_UNPREFIXED_NODE_LABELS
+        ):
             continue
         errors.append(
             f"{element.__name__} uses unprefixed AWS label {element.label!r}.",
@@ -145,7 +154,7 @@ def test_migrated_aws_labels_keep_legacy_alias_until_v1():
     for module_name, element in load_models(cartography.models):
         if module_name != "cartography.models.aws":
             continue
-        if not issubclass(element, CartographyNodeSchema):
+        if not is_node_schema(element):
             continue
         old_label = migrations_by_new_label.get(element.label)
         if old_label is None:
@@ -176,7 +185,7 @@ def test_aws_label_migration_registry_matches_model_aliases():
     for module_name, element in load_models(cartography.models):
         if module_name != "cartography.models.aws":
             continue
-        if not issubclass(element, CartographyNodeSchema):
+        if not is_node_schema(element):
             continue
 
         node_schema = element()
@@ -208,7 +217,7 @@ def test_provider_primary_node_labels_use_provider_prefix(module_name, prefix):
     for loaded_module_name, element in load_models(cartography.models):
         if loaded_module_name != module_name:
             continue
-        if not issubclass(element, CartographyNodeSchema):
+        if not is_node_schema(element):
             continue
         if element.label.startswith(prefix) or element.label in exceptions:
             continue
@@ -224,7 +233,7 @@ def test_provider_primary_node_labels_use_provider_prefix(module_name, prefix):
 def test_migrated_provider_labels_keep_legacy_alias_until_v1():
     errors: List[str] = []
     for module_name, element in load_models(cartography.models):
-        if not issubclass(element, CartographyNodeSchema):
+        if not is_node_schema(element):
             continue
         old_label = MIGRATED_PROVIDER_LABELS.get(module_name, {}).get(element.label)
         if old_label is None:
@@ -251,7 +260,7 @@ def test_relationship_endpoint_labels_are_registered():
     registered_labels: Set[str] = set(RELATION_ONLY_NODE_LABELS)
 
     for _, element in model_objects:
-        if not issubclass(element, CartographyNodeSchema):
+        if not is_node_schema(element):
             continue
         node_schema = element()
         registered_labels.add(node_schema.label)
@@ -262,7 +271,7 @@ def test_relationship_endpoint_labels_are_registered():
 
     errors: List[str] = []
     for module_name, element in model_objects:
-        if not issubclass(element, CartographyRelSchema):
+        if not is_rel_schema(element):
             continue
         rel_schema = element()
         for endpoint_name, label in (
@@ -285,7 +294,7 @@ def test_relationship_endpoints_do_not_use_migrated_aws_labels():
     errors: list[str] = []
 
     for module_name, element in load_models(cartography.models):
-        if not issubclass(element, CartographyRelSchema):
+        if not is_rel_schema(element):
             continue
         relationship = element()
         for endpoint_name, label in (
@@ -330,6 +339,9 @@ SUB_RESOURCE_REL_LABEL_EXCEPTIONS: Set[str] = {
 # entity.
 MODULES_WITHOUT_TENANT_ROOT: Set[str] = {
     "cartography.models.aibom",
+    # BBOT event nodes are associated to BbotScan with dynamic OBSERVED_IN
+    # MatchLinks rather than a static RESOURCE sub-resource relationship.
+    "cartography.models.bbot",
     "cartography.models.pagerduty",
     "cartography.models.trivy",
 }
@@ -358,6 +370,8 @@ GLOBAL_NODE_LABELS: Set[str] = {
     # Public/global registry data.
     "DockerScoutPublicImage",
     "DockerScoutPublicImageTag",
+    # An IP address that a DNS name resolves to can be resolved from many accounts.
+    "Ip",
     # GCP Artifact Registry images are a shared canonical container-image node
     # whose tenancy is set dynamically through a MatchLink
     # (`_sub_resource_label`/`_sub_resource_id` kwargs) rather than a fixed
@@ -394,6 +408,10 @@ GLOBAL_NODE_LABELS: Set[str] = {
     # person still in another team, so the team links are MatchLinks (same reasoning as
     # RailwayUser and GitHubUser).
     "NetlifyUser",
+    # An Airbyte user can belong to several organizations. Anchoring the identity to
+    # one organization would let that organization's cleanup delete a user, and
+    # edges, that another organization still references (same reasoning as NetlifyUser).
+    "AirbyteUser",
     # A Railway user can belong to several workspaces, and project members need not be
     # members of the workspace at all. Anchoring the identity to one workspace would let
     # that workspace's cleanup DETACH DELETE a user still referenced by another, so the
@@ -409,8 +427,14 @@ ADDITIONAL_TOP_LEVEL_TENANT_LABELS: Set[str] = {
     "AWSOrganization",
     # DatabricksWorkspace remains the root tenant for workspace resources, while
     # DatabricksAccount is a separate top-level tenant for the account hierarchy
-    # (and is absent on the workspace-only path).
+    # (and is absent on the workspace-only path). DatabricksMetastore is the root
+    # of the Unity Catalog hierarchy, which several workspaces can share.
     "DatabricksAccount",
+    "DatabricksMetastore",
+    # SnowflakeAccount remains the root tenant for every Snowflake resource, while
+    # SnowflakeOrganization is a separate top-level tenant for the organization
+    # hierarchy (and is absent unless the collector holds ORGADMIN).
+    "SnowflakeOrganization",
 }
 
 
@@ -426,7 +450,7 @@ def test_sub_resource_relationship():
     for module_name, node in load_models(cartography.models):
         if module_name not in label_has_anchor_per_module:
             label_has_anchor_per_module[module_name] = {}
-        if not issubclass(node, CartographyNodeSchema):
+        if not is_node_schema(node):
             continue
         sub_resource_relationship = getattr(node, "sub_resource_relationship", None)
         if sub_resource_relationship is None or not isinstance(

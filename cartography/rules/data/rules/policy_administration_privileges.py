@@ -127,7 +127,10 @@ _gcp_policy_manipulation_capabilities = Fact(
          [perm IN coalesce(role.permissions, [])
             WHERE perm IN patterns OR perm = 'iam.*' OR perm = 'resourcemanager.*' OR perm = '*'] AS matched
     WHERE size(matched) > 0
-    RETURN
+    // DISTINCT because a (resource, role) pair can have several GCPPolicyBinding nodes:
+    // conditional bindings append a condition hash to the binding id. They differ in no
+    // returned column, so without this the same identity repeats once per condition.
+    RETURN DISTINCT
         scope.id AS account,
         scope.id AS account_id,
         coalesce(principal.email, principal.id) AS principal_name,
@@ -186,6 +189,11 @@ _azure_policy_manipulation_capabilities = Fact(
     cypher_query="""
     MATCH (sub:AzureSubscription)-[:RESOURCE]->(ra:AzureRoleAssignment)
     MATCH (ra)-[:ROLE_ASSIGNED]->(rd:AzureRoleDefinition)-[:HAS_PERMISSIONS]->(perm:AzurePermissions)
+    // A role assignment inherited from a management group is one node shared by
+    // every subscription, and each subscription links it to its own copy of the
+    // role definition. Keep the copy this subscription owns, or every
+    // subscription pairs with every other subscription's copy.
+    MATCH (sub)-[:RESOURCE]->(rd)
     // EntraPrincipal is the umbrella label carried by EntraUser, EntraGroup and
     // EntraServicePrincipal. Matching it directly keeps the returned rows aligned
     // with the declared asset_label and lets Neo4j use the label index.
@@ -245,6 +253,7 @@ _azure_policy_manipulation_capabilities = Fact(
     cypher_visual_query="""
     MATCH p1=(sub:AzureSubscription)-[:RESOURCE]->(ra:AzureRoleAssignment)
     MATCH p2=(ra)-[:ROLE_ASSIGNED]->(rd:AzureRoleDefinition)-[:HAS_PERMISSIONS]->(perm:AzurePermissions)
+    MATCH (sub)-[:RESOURCE]->(rd)
     MATCH p3=(principal:EntraPrincipal)-[:HAS_ROLE_ASSIGNMENT]->(ra)
     // Mirror the finding query: at least one searched pattern is granted
     // by actions AND not shadowed by not_actions.
@@ -357,7 +366,7 @@ policy_administration_privileges = Rule(
         "stride:spoofing",
         "stride:tampering",
     ),
-    version="0.2.1",
+    version="0.2.2",
     frameworks=(
         iso27001_annex_a("5.18"),
         iso27001_annex_a("8.2"),

@@ -235,10 +235,12 @@ class MatchLinkSubResource:
     Sub-resource scoping metadata for load_matchlinks() source or target matches.
 
     This helper lets a MatchLink schema opt into matching an endpoint through its
-    sub-resource relationship, such as:
+    sub-resource relationship, such as::
+
         MATCH (sub_resource:Parent {id: $PARENT_ID})
         UNWIND $DictList as item
-        MATCH (from:Child {id: item.child_id})<-[:RESOURCE]-(sub_resource)
+        MATCH (from:Child {id: item.child_id})
+            WHERE EXISTS { (from)<-[:RESOURCE]-(sub_resource) }
 
     Direction follows the same convention as CartographyRelSchema: it describes
     the relationship from the MatchLink endpoint node to the sub-resource node.

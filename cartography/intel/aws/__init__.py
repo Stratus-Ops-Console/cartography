@@ -16,6 +16,7 @@ import boto3
 import botocore.exceptions
 import neo4j
 
+from cartography.analysis.aws.analysis import AWS_EC2_ASSET_EXPOSURE_AUTO_SCALING_GROUP
 from cartography.analysis.aws.analysis import AWS_EC2_ASSET_EXPOSURE_JOBS
 from cartography.analysis.aws.analysis import AWS_EC2_IAM_INSTANCE_PROFILE
 from cartography.analysis.aws.analysis import AWS_EC2_KEYPAIR_ANALYSIS_JOBS
@@ -27,6 +28,7 @@ from cartography.analysis.aws.analysis import AWS_LB_CONTAINER_EXPOSURE
 from cartography.analysis.aws.analysis import AWS_LB_NACL_DIRECT
 from cartography.config import Config
 from cartography.intel.aws.label_migrations import migrate_legacy_aws_labels
+from cartography.intel.aws.util.arns import get_account_partition
 from cartography.intel.aws.util.botocore_config import create_boto3_client
 from cartography.intel.aws.util.common import parse_and_validate_aws_account_ids
 from cartography.intel.aws.util.common import parse_and_validate_aws_regions
@@ -41,6 +43,7 @@ from cartography.util import timeit
 
 from . import ec2
 from . import organizations
+from . import resourcegroupstaggingapi
 from . import ssm as ssm_intel
 from .resources import RESOURCE_FUNCTIONS
 
@@ -139,16 +142,23 @@ def _sync_one_account(
     module_dependencies = {
         "ssm": ["ec2:instance"],
         "ec2:images": ["ec2:instance"],
+        "ec2:autoscalinggroup": ["ec2:launch_templates", "ec2:instance"],
         "ec2:load_balancer": ["ec2:subnet", "ec2:instance"],
         "ec2:load_balancer_v2": ["ec2:subnet", "ec2:instance"],
         "ec2:load_balancer_v2:expose": [
             "ec2:load_balancer_v2",
             "ec2:network_interface",
+            "ec2:subnet",
         ],
         "ec2:route_table": ["ec2:vpc_endpoint"],
-        # `ecs` creates IS_INSTANCE rels (AWSECSContainerInstance→AWSEC2Instance) and
-        # TARGETS matchlinks (AWSELBV2TargetGroup→AWSECSService)
-        "ecs": ["ec2:instance", "ec2:load_balancer_v2"],
+        # ECS matches existing roles, images, instances, ENIs, and target groups.
+        "ecs": [
+            "iam",
+            "ecr",
+            "ec2:instance",
+            "ec2:network_interface",
+            "ec2:load_balancer_v2",
+        ],
         "dynamodb": ["kms"],
         # s3/rds/efs create canonical (:...)-[:ENCRYPTED_BY]->(:AWSKMSKey) edges by
         # matching existing AWSKMSKey nodes on their ARN, so kms must sync first.
@@ -212,19 +222,23 @@ def _sync_one_account(
     if "resourcegroupstaggingapi" in aws_requested_syncs:
         RESOURCE_FUNCTIONS["resourcegroupstaggingapi"](**sync_args)
 
-    run_typed_analysis_job(
+    run_typed_analysis_and_ensure_deps(
         AWS_EC2_IAM_INSTANCE_PROFILE,
-        neo4j_session,
+        AWS_EC2_IAM_INSTANCE_PROFILE_DEPS,
+        requested_syncs_set,
         common_job_parameters,
+        neo4j_session,
     )
 
-    run_typed_analysis_job(
+    run_typed_analysis_and_ensure_deps(
         AWS_LAMBDA_ECR,
-        neo4j_session,
+        AWS_LAMBDA_ECR_DEPS,
+        requested_syncs_set,
         common_job_parameters,
+        neo4j_session,
     )
 
-    if {"ec2:network_acls", "ec2:load_balancer_v2"}.issubset(requested_syncs_set):
+    if AWS_LB_NACL_DIRECT_DEPS.issubset(requested_syncs_set):
         run_typed_analysis_job(
             AWS_LB_NACL_DIRECT,
             neo4j_session,
@@ -269,7 +283,21 @@ def _resolve_aws_ssm_public_parameter_prefix_allowlist(
         return config_value
     if env_value is not None:
         return env_value
-    return ssm_intel.DEFAULT_PUBLIC_PARAMETER_PREFIX_ALLOWLIST
+    return ""
+
+
+def _get_account_partition(
+    boto3_session: boto3.Session,
+    regions: list[str] | None,
+) -> str:
+    """
+    Return the AWS partition of an account, for example "aws-us-gov" for GovCloud.
+
+    It matches the partition that the account sync uses for synthesized ARNs: the partition of the
+    regions to sync or, when the regions are discovered, of the session's configured region.
+    Without a region, botocore resolves the account's endpoints in "aws".
+    """
+    return get_account_partition(regions or [], boto3_session.region_name)
 
 
 def _get_boto3_session_for_profile(
@@ -291,6 +319,15 @@ def _sync_shared_public_ssm_parameters(
     aws_best_effort_mode: bool,
 ) -> None:
     if "ssm" not in requested_syncs:
+        return
+
+    if not ssm_intel.get_public_parameter_prefixes(common_job_parameters):
+        ssm_intel.sync_public_parameters(
+            neo4j_session,
+            {},
+            common_job_parameters["UPDATE_TAG"],
+            common_job_parameters,
+        )
         return
 
     region_session_candidates: dict[str, list[boto3.Session]] = {}
@@ -607,7 +644,24 @@ def _sync_multiple_accounts(
     use_explicit_profile: bool = False,
 ) -> bool:
     logger.info("Syncing AWS accounts: %s", ", ".join(accounts.values()))
-    organizations.sync(neo4j_session, accounts, sync_tag, common_job_parameters)
+    # Each account's root principal ARN must use the partition of its credentials, for example
+    # "aws-us-gov" for GovCloud.
+    account_partitions = {
+        account_id: _get_account_partition(
+            boto3.Session(
+                **({"profile_name": profile_name} if use_explicit_profile else {})
+            ),
+            regions,
+        )
+        for profile_name, account_id in accounts.items()
+    }
+    organizations.sync(
+        neo4j_session,
+        accounts,
+        sync_tag,
+        common_job_parameters,
+        account_partitions,
+    )
     _sync_aws_organizations_for_accounts(
         neo4j_session,
         accounts,
@@ -679,9 +733,31 @@ def _sync_multiple_accounts(
             neo4j_session,
             common_job_parameters,
         )
+        # AWSTag nodes are shared across accounts, so unlinked ones can only be removed once
+        # every account has linked its tags. This is skipped when an account failed in
+        # best-effort mode (the raise above), so tags that account would have linked survive
+        # and any true orphans are removed on the next fully successful sync.
+        if "resourcegroupstaggingapi" in aws_requested_syncs:
+            resourcegroupstaggingapi.cleanup_orphan_tags(
+                neo4j_session,
+                common_job_parameters,
+            )
         return True
     return False
 
+
+# Per-account analysis jobs must only run when every producer was refreshed.
+AWS_EC2_IAM_INSTANCE_PROFILE_DEPS = {
+    "iam",
+    "iaminstanceprofiles",
+    "ec2:instance",
+}
+AWS_LAMBDA_ECR_DEPS = {"ecr", "lambda_function"}
+AWS_LB_NACL_DIRECT_DEPS = {
+    "ec2:network_acls",
+    "ec2:load_balancer_v2",
+    "ec2:subnet",
+}
 
 # Resource syncs that feed the `exposed_internet` flag: AWS_EC2_ASSET_EXPOSURE_JOBS (which sets it on
 # load balancers, instances, etc.) only runs when all of these were requested this cycle.
@@ -690,6 +766,9 @@ AWS_EC2_ASSET_EXPOSURE_DEPS = {
     "ec2:security_group",
     "ec2:load_balancer",
     "ec2:load_balancer_v2",
+}
+AWS_EC2_ASSET_EXPOSURE_AUTO_SCALING_GROUP_DEPS = AWS_EC2_ASSET_EXPOSURE_DEPS | {
+    "ec2:autoscalinggroup"
 }
 # Both the ECS internet-exposure property and the LB->container edge gate on lb.exposed_internet, so
 # they must require the full producer dependency set above: otherwise a partial sync that skips the
@@ -727,10 +806,23 @@ def _perform_aws_analysis(
         neo4j_session,
     )
 
+    # DEPRECATED: cleanup for pre-data-model AWS nodes with no sub-resource edge,
+    # which no module's cleanup reaches; remove in v1.0.0 with AWS_LABEL_MIGRATIONS.
+    run_analysis_and_ensure_deps(
+        "aws_legacy_node_cleanup.json",
+        set(),
+        requested_syncs_as_set,
+        common_job_parameters,
+        neo4j_session,
+    )
+
     for job in AWS_EC2_ASSET_EXPOSURE_JOBS:
+        dependencies = AWS_EC2_ASSET_EXPOSURE_DEPS
+        if job is AWS_EC2_ASSET_EXPOSURE_AUTO_SCALING_GROUP:
+            dependencies = AWS_EC2_ASSET_EXPOSURE_AUTO_SCALING_GROUP_DEPS
         run_typed_analysis_and_ensure_deps(
             job,
-            AWS_EC2_ASSET_EXPOSURE_DEPS,
+            dependencies,
             requested_syncs_as_set,
             common_job_parameters,
             neo4j_session,

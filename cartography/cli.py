@@ -56,12 +56,16 @@ PANEL_GSUITE = "GSuite Options"
 PANEL_GOOGLE_WORKSPACE = "Google Workspace Options"
 PANEL_DIGITALOCEAN = "DigitalOcean Options"
 PANEL_CROWDSTRIKE = "CrowdStrike Options"
+PANEL_HUNTRESS = "Huntress Options"
 PANEL_JAMF = "Jamf Options"
 PANEL_KANDJI = "Kandji Options"
+PANEL_MIRADORE = "Miradore Options"
 PANEL_KUBERNETES = "Kubernetes Options"
 PANEL_CVE = "CVE Options"
 PANEL_CVE_METADATA = "CVE Metadata Options"
 PANEL_PAGERDUTY = "PagerDuty Options"
+PANEL_JIRA = "Jira Options"
+PANEL_OPSGENIE = "Opsgenie Options"
 PANEL_LASTPASS = "LastPass Options"
 PANEL_BIGFIX = "BigFix Options"
 PANEL_DUO = "Duo Options"
@@ -74,22 +78,28 @@ PANEL_OPENAI = "OpenAI Options"
 PANEL_ANTHROPIC = "Anthropic Options"
 PANEL_AIRBYTE = "Airbyte Options"
 PANEL_DATABRICKS = "Databricks Options"
+PANEL_BBOT = "BBOT Options"
 PANEL_DOCKER_SCOUT = "Docker Scout Options"
 PANEL_TRIVY = "Trivy Options"
 PANEL_SYFT = "Syft Options"
 PANEL_AIBOM = "AIBOM Options"
+PANEL_ZIZMOR = "Zizmor Options"
 PANEL_UBUNTU = "Ubuntu Security Options"
 PANEL_ONTOLOGY = "Ontology Options"
 PANEL_SCALEWAY = "Scaleway Options"
 PANEL_SENTINELONE = "SentinelOne Options"
 PANEL_TENABLE = "Tenable Options"
+PANEL_WIZ = "Wiz Options"
+PANEL_ORCA = "Orca Security Options"
 PANEL_KEYCLOAK = "Keycloak Options"
 PANEL_SALESFORCE = "Salesforce Options"
 PANEL_SLACK = "Slack Options"
+PANEL_NOTION = "Notion Options"
 PANEL_SENTRY = "Sentry Options"
 PANEL_SUBIMAGE = "SubImage Options"
 PANEL_SPACELIFT = "Spacelift Options"
 PANEL_WORKOS = "WorkOS Options"
+PANEL_ZOOM = "Zoom Options"
 PANEL_JUMPCLOUD = "JumpCloud Options"
 PANEL_SOCKETDEV = "Socket.dev Options"
 PANEL_VERCEL = "Vercel Options"
@@ -98,6 +108,8 @@ PANEL_RAILWAY = "Railway Options"
 PANEL_NETLIFY = "Netlify Options"
 PANEL_CIRCLECI = "CircleCI Options"
 PANEL_MODAL = "Modal Options"
+PANEL_SNOWFLAKE = "Snowflake Options"
+PANEL_ZENDESK = "Zendesk Options"
 PANEL_STATSD = "StatsD Metrics"
 PANEL_ANALYSIS = "Analysis Options"
 
@@ -116,14 +128,19 @@ MODULE_PANELS = {
     "googleworkspace": PANEL_GOOGLE_WORKSPACE,
     "digitalocean": PANEL_DIGITALOCEAN,
     "crowdstrike": PANEL_CROWDSTRIKE,
+    "huntress": PANEL_HUNTRESS,
     "jamf": PANEL_JAMF,
     "kandji": PANEL_KANDJI,
+    "miradore": PANEL_MIRADORE,
     "kubernetes": PANEL_KUBERNETES,
     "cve": PANEL_CVE,
     "cve_metadata": PANEL_CVE_METADATA,
     "pagerduty": PANEL_PAGERDUTY,
+    "zoom": PANEL_ZOOM,
+    "opsgenie": PANEL_OPSGENIE,
     "jumpcloud": PANEL_JUMPCLOUD,
     "socketdev": PANEL_SOCKETDEV,
+    "jira": PANEL_JIRA,
     "lastpass": PANEL_LASTPASS,
     "bigfix": PANEL_BIGFIX,
     "duo": PANEL_DUO,
@@ -136,19 +153,24 @@ MODULE_PANELS = {
     "anthropic": PANEL_ANTHROPIC,
     "airbyte": PANEL_AIRBYTE,
     "databricks": PANEL_DATABRICKS,
+    "bbot": PANEL_BBOT,
     "docker_scout": PANEL_DOCKER_SCOUT,
     "trivy": PANEL_TRIVY,
     "syft": PANEL_SYFT,
     "aibom": PANEL_AIBOM,
+    "zizmor": PANEL_ZIZMOR,
     "ubuntu": PANEL_UBUNTU,
     "ontology": PANEL_ONTOLOGY,
     "scaleway": PANEL_SCALEWAY,
     "sentry": PANEL_SENTRY,
     "sentinelone": PANEL_SENTINELONE,
     "tenable": PANEL_TENABLE,
+    "wiz": PANEL_WIZ,
+    "orca": PANEL_ORCA,
     "keycloak": PANEL_KEYCLOAK,
     "salesforce": PANEL_SALESFORCE,
     "slack": PANEL_SLACK,
+    "notion": PANEL_NOTION,
     "subimage": PANEL_SUBIMAGE,
     "spacelift": PANEL_SPACELIFT,
     "workos": PANEL_WORKOS,
@@ -158,6 +180,8 @@ MODULE_PANELS = {
     "netlify": PANEL_NETLIFY,
     "circleci": PANEL_CIRCLECI,
     "modal": PANEL_MODAL,
+    "snowflake": PANEL_SNOWFLAKE,
+    "zendesk": PANEL_ZENDESK,
     "analysis": PANEL_ANALYSIS,
 }
 
@@ -242,8 +266,21 @@ def _resolve_report_source_option(
         raise typer.BadParameter(str(exc)) from exc
 
 
+def _read_access_token_env_var(product: str, env_var: str) -> str:
+    logger.debug(
+        "Reading access token for %s from environment variable %s", product, env_var
+    )
+    access_token = os.environ.get(env_var)
+    if not access_token:
+        raise typer.BadParameter(
+            f"Environment variable {env_var} is not set or is empty."
+        )
+    return access_token
+
+
 def _resolve_microsoft_credential_options(
     *,
+    microsoft_delegated_auth: bool,
     microsoft_tenant_id: str | None,
     microsoft_client_id: str | None,
     microsoft_client_secret_env_var: str | None,
@@ -266,6 +303,27 @@ def _resolve_microsoft_credential_options(
 
     has_microsoft_values = any(value is not None for value in microsoft_values)
     has_entra_values = any(value is not None for value in entra_values)
+    client_credentials = (
+        microsoft_client_id,
+        microsoft_client_secret_env_var,
+        entra_client_id,
+        entra_client_secret_env_var,
+    )
+    if microsoft_delegated_auth and any(
+        value is not None for value in client_credentials
+    ):
+        raise typer.BadParameter(
+            "--microsoft-delegated-auth cannot be combined with a Microsoft "
+            "client ID or client secret.",
+        )
+    if (
+        microsoft_delegated_auth
+        and microsoft_tenant_id is None
+        and entra_tenant_id is None
+    ):
+        raise typer.BadParameter(
+            "--microsoft-delegated-auth requires --microsoft-tenant-id.",
+        )
     if has_microsoft_values and has_entra_values:
         raise typer.BadParameter(
             "Cannot mix Microsoft credential flags "
@@ -636,6 +694,7 @@ class CLI:
                 typer.Option(
                     "--aws-tagging-api-cleanup-batch",
                     help="Batch size for Resource Groups Tagging API cleanup (AWSTag nodes). Default: 1000.",
+                    min=1,
                     rich_help_panel=PANEL_AWS,
                     hidden=PANEL_AWS not in visible_panels,
                 ),
@@ -646,7 +705,8 @@ class CLI:
                     "--aws-ssm-public-parameter-prefix-allowlist",
                     help=(
                         "Comma-separated AWS-managed public SSM parameter prefixes to ingest. "
-                        "Set to an empty string to disable public parameter ingestion."
+                        "For example: /aws/service/eks/optimized-ami/. "
+                        "Public parameter ingestion is disabled by default."
                     ),
                     rich_help_panel=PANEL_AWS,
                     hidden=PANEL_AWS not in visible_panels,
@@ -718,6 +778,32 @@ class CLI:
                     hidden=PANEL_AZURE not in visible_panels,
                 ),
             ] = None,
+            azure_access_token_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--azure-access-token-env-var",
+                    help=(
+                        "Environment variable name containing an Azure Resource "
+                        "Manager access token, such as a signed-in user's "
+                        "delegated token. Cannot be combined with --azure-sp-auth."
+                    ),
+                    rich_help_panel=PANEL_AZURE,
+                    hidden=PANEL_AZURE not in visible_panels,
+                ),
+            ] = None,
+            azure_requested_syncs: Annotated[
+                str | None,
+                typer.Option(
+                    "--azure-requested-syncs",
+                    help=(
+                        "Comma-separated list of Azure resources to sync. "
+                        'Example: "rbac,compute". See '
+                        "cartography.intel.azure.resources for full list."
+                    ),
+                    rich_help_panel=PANEL_AZURE,
+                    hidden=PANEL_AZURE not in visible_panels,
+                ),
+            ] = None,
             azure_permission_relationships_file: Annotated[
                 str,
                 typer.Option(
@@ -753,6 +839,44 @@ class CLI:
                 typer.Option(
                     "--microsoft-client-secret-env-var",
                     help="Environment variable name containing Microsoft client secret.",
+                    rich_help_panel=PANEL_MICROSOFT,
+                    hidden=PANEL_MICROSOFT not in visible_panels,
+                ),
+            ] = None,
+            microsoft_delegated_auth: Annotated[
+                bool,
+                typer.Option(
+                    "--microsoft-delegated-auth",
+                    help=(
+                        "EXPERIMENTAL: use the current Azure CLI user for a "
+                        "best-effort Entra-only sync. Prefer application authentication."
+                    ),
+                    rich_help_panel=PANEL_MICROSOFT,
+                    hidden=PANEL_MICROSOFT not in visible_panels,
+                ),
+            ] = False,
+            microsoft_access_token_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--microsoft-access-token-env-var",
+                    help=(
+                        "EXPERIMENTAL: environment variable name containing a "
+                        "Microsoft Graph access token, such as a signed-in user's "
+                        "delegated token. Implies --microsoft-delegated-auth."
+                    ),
+                    rich_help_panel=PANEL_MICROSOFT,
+                    hidden=PANEL_MICROSOFT not in visible_panels,
+                ),
+            ] = None,
+            microsoft_requested_syncs: Annotated[
+                str | None,
+                typer.Option(
+                    "--microsoft-requested-syncs",
+                    help=(
+                        "Comma-separated list of Microsoft resources to sync. "
+                        'Example: "users,groups". See '
+                        "cartography.intel.microsoft.resources for full list."
+                    ),
                     rich_help_panel=PANEL_MICROSOFT,
                     hidden=PANEL_MICROSOFT not in visible_panels,
                 ),
@@ -818,6 +942,44 @@ class CLI:
                     hidden=PANEL_GCP not in visible_panels,
                 ),
             ] = "cartography/data/gcp_permission_relationships.yaml",
+            gcp_excluded_org_ids: Annotated[
+                str | None,
+                typer.Option(
+                    "--gcp-excluded-org-ids",
+                    help=(
+                        "Comma-separated list of GCP organization IDs to exclude from ingestion. "
+                        'Example: "123456789012,987654321098".'
+                    ),
+                    rich_help_panel=PANEL_GCP,
+                    hidden=PANEL_GCP not in visible_panels,
+                ),
+            ] = None,
+            gcp_excluded_folder_ids: Annotated[
+                str | None,
+                typer.Option(
+                    "--gcp-excluded-folder-ids",
+                    help=(
+                        "Comma-separated list of GCP folder IDs to exclude from ingestion. "
+                        "The entire subtree under each excluded folder is skipped. "
+                        'Example: "123456789012,987654321098".'
+                    ),
+                    rich_help_panel=PANEL_GCP,
+                    hidden=PANEL_GCP not in visible_panels,
+                ),
+            ] = None,
+            gcp_exclude_org_root_projects: Annotated[
+                bool,
+                typer.Option(
+                    "--gcp-exclude-org-root-projects",
+                    help=(
+                        "If set, projects attached directly to the organization root "
+                        "(not inside any folder) are excluded from ingestion. "
+                        "Included by default."
+                    ),
+                    rich_help_panel=PANEL_GCP,
+                    hidden=PANEL_GCP not in visible_panels,
+                ),
+            ] = False,
             # =================================================================
             # OCI Options
             # =================================================================
@@ -851,6 +1013,66 @@ class CLI:
                     hidden=PANEL_OKTA not in visible_panels,
                 ),
             ] = None,
+            okta_client_id: Annotated[
+                str | None,
+                typer.Option(
+                    "--okta-client-id",
+                    help=(
+                        "Client ID of an Okta OAuth service app. Used with "
+                        "--okta-private-key-env-var instead of an API key."
+                    ),
+                    rich_help_panel=PANEL_OKTA,
+                    hidden=PANEL_OKTA not in visible_panels,
+                ),
+            ] = None,
+            okta_private_key_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--okta-private-key-env-var",
+                    help=(
+                        "Environment variable name containing the Okta OAuth "
+                        "service app's private key, as a PEM string or a JWK."
+                    ),
+                    rich_help_panel=PANEL_OKTA,
+                    hidden=PANEL_OKTA not in visible_panels,
+                ),
+            ] = None,
+            okta_private_key_id: Annotated[
+                str | None,
+                typer.Option(
+                    "--okta-private-key-id",
+                    help=(
+                        "Key ID (kid) of the Okta OAuth service app's public key. "
+                        "Not needed when the private key is a JWK with a kid."
+                    ),
+                    rich_help_panel=PANEL_OKTA,
+                    hidden=PANEL_OKTA not in visible_panels,
+                ),
+            ] = None,
+            okta_scopes: Annotated[
+                str | None,
+                typer.Option(
+                    "--okta-scopes",
+                    help=(
+                        "Comma-separated OAuth scopes to request. Defaults to "
+                        "every read scope the Okta sync uses."
+                    ),
+                    rich_help_panel=PANEL_OKTA,
+                    hidden=PANEL_OKTA not in visible_panels,
+                ),
+            ] = None,
+            okta_disable_dpop: Annotated[
+                bool,
+                typer.Option(
+                    "--okta-disable-dpop",
+                    help=(
+                        "Do not send DPoP proofs when requesting Okta OAuth "
+                        "access tokens."
+                    ),
+                    rich_help_panel=PANEL_OKTA,
+                    hidden=PANEL_OKTA not in visible_panels,
+                ),
+            ] = False,
             okta_base_domain: Annotated[
                 str,
                 typer.Option(
@@ -891,6 +1113,18 @@ class CLI:
                     hidden=PANEL_GITHUB not in visible_panels,
                 ),
             ] = 30,
+            # =================================================================
+            # Notion Options
+            # =================================================================
+            notion_config_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--notion-config-env-var",
+                    help="Environment variable name containing Base64 encoded Notion config.",
+                    rich_help_panel=PANEL_NOTION,
+                    hidden=PANEL_NOTION not in visible_panels,
+                ),
+            ] = None,
             # =================================================================
             # GitLab Options
             # =================================================================
@@ -973,6 +1207,36 @@ class CLI:
                 ),
             ] = None,
             # =================================================================
+            # Huntress Options
+            # =================================================================
+            huntress_api_key_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--huntress-api-key-env-var",
+                    help="Environment variable name containing the Huntress account API key.",
+                    rich_help_panel=PANEL_HUNTRESS,
+                    hidden=PANEL_HUNTRESS not in visible_panels,
+                ),
+            ] = None,
+            huntress_api_secret_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--huntress-api-secret-env-var",
+                    help="Environment variable name containing the Huntress API secret key.",
+                    rich_help_panel=PANEL_HUNTRESS,
+                    hidden=PANEL_HUNTRESS not in visible_panels,
+                ),
+            ] = None,
+            huntress_base_uri: Annotated[
+                str | None,
+                typer.Option(
+                    "--huntress-base-uri",
+                    help="Huntress API base URI, e.g. https://api.huntress.io.",
+                    rich_help_panel=PANEL_HUNTRESS,
+                    hidden=PANEL_HUNTRESS not in visible_panels,
+                ),
+            ] = None,
+            # =================================================================
             # Jamf Options
             # =================================================================
             jamf_base_uri: Annotated[
@@ -1033,6 +1297,36 @@ class CLI:
                 ),
             ] = None,
             # =================================================================
+            # Miradore Options
+            # =================================================================
+            miradore_base_uri: Annotated[
+                str | None,
+                typer.Option(
+                    "--miradore-base-uri",
+                    help="Miradore base URI. Defaults to https://online.miradore.com.",
+                    rich_help_panel=PANEL_MIRADORE,
+                    hidden=PANEL_MIRADORE not in visible_panels,
+                ),
+            ] = None,
+            miradore_site_name: Annotated[
+                str | None,
+                typer.Option(
+                    "--miradore-site-name",
+                    help="Miradore site name, which identifies the tenant.",
+                    rich_help_panel=PANEL_MIRADORE,
+                    hidden=PANEL_MIRADORE not in visible_panels,
+                ),
+            ] = None,
+            miradore_api_key_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--miradore-api-key-env-var",
+                    help="Environment variable name containing the Miradore API authentication key.",
+                    rich_help_panel=PANEL_MIRADORE,
+                    hidden=PANEL_MIRADORE not in visible_panels,
+                ),
+            ] = None,
+            # =================================================================
             # Kubernetes Options
             # =================================================================
             k8s_kubeconfig: Annotated[
@@ -1044,11 +1338,38 @@ class CLI:
                     hidden=PANEL_KUBERNETES not in visible_panels,
                 ),
             ] = None,
+            gke_clusters: Annotated[
+                list[str] | None,
+                typer.Option(
+                    "--gke-cluster",
+                    help="GKE resource name (projects/PROJECT/locations/LOCATION/clusters/NAME). Repeat for multiple clusters. Uses Google ADC without kubeconfig.",
+                    rich_help_panel=PANEL_KUBERNETES,
+                    hidden=PANEL_KUBERNETES not in visible_panels,
+                ),
+            ] = None,
+            gke_endpoint: Annotated[
+                str,
+                typer.Option(
+                    "--gke-endpoint",
+                    help="GKE API endpoint: dns, private, or public. No automatic fallback.",
+                    rich_help_panel=PANEL_KUBERNETES,
+                    hidden=PANEL_KUBERNETES not in visible_panels,
+                ),
+            ] = "dns",
+            gke_impersonate_service_account: Annotated[
+                str | None,
+                typer.Option(
+                    "--gke-impersonate-service-account",
+                    help="Service account email to impersonate for GKE discovery and Kubernetes reads.",
+                    rich_help_panel=PANEL_KUBERNETES,
+                    hidden=PANEL_KUBERNETES not in visible_panels,
+                ),
+            ] = None,
             managed_kubernetes: Annotated[
                 str | None,
                 typer.Option(
                     "--managed-kubernetes",
-                    help="Type of managed Kubernetes service (e.g., 'eks').",
+                    help="Type of managed Kubernetes service ('eks' or 'gke').",
                     rich_help_panel=PANEL_KUBERNETES,
                     hidden=PANEL_KUBERNETES not in visible_panels,
                 ),
@@ -1130,6 +1451,37 @@ class CLI:
                 ),
             ] = None,
             # =================================================================
+            # Opsgenie Options
+            # =================================================================
+            opsgenie_api_key_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--opsgenie-api-key-env-var",
+                    help="Environment variable name containing the Opsgenie API key.",
+                    rich_help_panel=PANEL_OPSGENIE,
+                    hidden=PANEL_OPSGENIE not in visible_panels,
+                ),
+            ] = None,
+            opsgenie_api_url: Annotated[
+                str,
+                typer.Option(
+                    "--opsgenie-api-url",
+                    help="Opsgenie API base URL.",
+                    rich_help_panel=PANEL_OPSGENIE,
+                    hidden=PANEL_OPSGENIE not in visible_panels,
+                ),
+            ] = "https://api.opsgenie.com",
+            opsgenie_request_timeout: Annotated[
+                int,
+                typer.Option(
+                    "--opsgenie-request-timeout",
+                    help="Timeout in seconds for Opsgenie API requests.",
+                    min=1,
+                    rich_help_panel=PANEL_OPSGENIE,
+                    hidden=PANEL_OPSGENIE not in visible_panels,
+                ),
+            ] = 60,
+            # =================================================================
             # GSuite Options
             # =================================================================
             gsuite_auth_method: Annotated[
@@ -1172,6 +1524,45 @@ class CLI:
                 ),
             ] = "GOOGLEWORKSPACE_GOOGLE_APPLICATION_CREDENTIALS",
             # =================================================================
+            # Jira Options
+            # =================================================================
+            jira_cloud_id: Annotated[
+                str | None,
+                typer.Option(
+                    "--jira-cloud-id",
+                    help="Jira Cloud site ID (UUID).",
+                    rich_help_panel=PANEL_JIRA,
+                    hidden=PANEL_JIRA not in visible_panels,
+                ),
+            ] = None,
+            jira_email: Annotated[
+                str | None,
+                typer.Option(
+                    "--jira-email",
+                    help="Email address of the Jira API-token owner.",
+                    rich_help_panel=PANEL_JIRA,
+                    hidden=PANEL_JIRA not in visible_panels,
+                ),
+            ] = None,
+            jira_api_token_env_var: Annotated[
+                str,
+                typer.Option(
+                    "--jira-api-token-env-var",
+                    help="Environment variable containing the Jira API token.",
+                    rich_help_panel=PANEL_JIRA,
+                    hidden=PANEL_JIRA not in visible_panels,
+                ),
+            ] = "JIRA_API_TOKEN",
+            jira_site_url: Annotated[
+                str | None,
+                typer.Option(
+                    "--jira-site-url",
+                    help="HTTPS *.atlassian.net origin for an unscoped API token; omit for scoped tokens.",
+                    rich_help_panel=PANEL_JIRA,
+                    hidden=PANEL_JIRA not in visible_panels,
+                ),
+            ] = None,
+            # =================================================================
             # LastPass Options
             # =================================================================
             lastpass_cid_env_var: Annotated[
@@ -1192,6 +1583,66 @@ class CLI:
                     hidden=PANEL_LASTPASS not in visible_panels,
                 ),
             ] = None,
+            # =================================================================
+            # Zoom Options
+            # =================================================================
+            zoom_account_id: Annotated[
+                str | None,
+                typer.Option(
+                    "--zoom-account-id",
+                    help="Zoom account ID for server-to-server OAuth.",
+                    rich_help_panel=PANEL_ZOOM,
+                    hidden=PANEL_ZOOM not in visible_panels,
+                ),
+            ] = None,
+            zoom_client_id: Annotated[
+                str | None,
+                typer.Option(
+                    "--zoom-client-id",
+                    help="Zoom server-to-server OAuth client ID.",
+                    rich_help_panel=PANEL_ZOOM,
+                    hidden=PANEL_ZOOM not in visible_panels,
+                ),
+            ] = None,
+            zoom_client_secret_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--zoom-client-secret-env-var",
+                    help="Environment variable containing the Zoom OAuth client secret.",
+                    rich_help_panel=PANEL_ZOOM,
+                    hidden=PANEL_ZOOM not in visible_panels,
+                ),
+            ] = "ZOOM_CLIENT_SECRET",
+            zoom_sections: Annotated[
+                str,
+                typer.Option(
+                    "--zoom-sections",
+                    help="Optional comma-separated Zoom inventories: groups,roles,settings,apps,meetings,recordings,client_versions. Users always sync.",
+                    rich_help_panel=PANEL_ZOOM,
+                    hidden=PANEL_ZOOM not in visible_panels,
+                ),
+            ] = "",
+            zoom_lookback_days: Annotated[
+                int,
+                typer.Option(
+                    "--zoom-lookback-days",
+                    min=1,
+                    max=30,
+                    help="UTC days of recordings to inventory (1-30).",
+                    rich_help_panel=PANEL_ZOOM,
+                    hidden=PANEL_ZOOM not in visible_panels,
+                ),
+            ] = 7,
+            zoom_request_limit: Annotated[
+                int,
+                typer.Option(
+                    "--zoom-request-limit",
+                    min=1,
+                    help="Maximum logical Zoom GET requests per sync; retries of one request count once. Optional sections that reach it keep prior data.",
+                    rich_help_panel=PANEL_ZOOM,
+                    hidden=PANEL_ZOOM not in visible_panels,
+                ),
+            ] = 100000,
             # =================================================================
             # JumpCloud Options
             # =================================================================
@@ -1614,6 +2065,33 @@ class CLI:
                     hidden=PANEL_DATABRICKS not in visible_panels,
                 ),
             ] = None,
+            databricks_azure_tenant_id: Annotated[
+                str | None,
+                typer.Option(
+                    "--databricks-azure-tenant-id",
+                    help="Microsoft Entra ID tenant ID of the service principal for an Azure Databricks workspace.",
+                    rich_help_panel=PANEL_DATABRICKS,
+                    hidden=PANEL_DATABRICKS not in visible_panels,
+                ),
+            ] = None,
+            databricks_azure_client_id: Annotated[
+                str | None,
+                typer.Option(
+                    "--databricks-azure-client-id",
+                    help="Microsoft Entra ID service principal client ID for an Azure Databricks workspace.",
+                    rich_help_panel=PANEL_DATABRICKS,
+                    hidden=PANEL_DATABRICKS not in visible_panels,
+                ),
+            ] = None,
+            databricks_azure_client_secret_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--databricks-azure-client-secret-env-var",
+                    help="Environment variable name containing the Microsoft Entra ID service principal client secret.",
+                    rich_help_panel=PANEL_DATABRICKS,
+                    hidden=PANEL_DATABRICKS not in visible_panels,
+                ),
+            ] = None,
             databricks_account_id: Annotated[
                 str | None,
                 typer.Option(
@@ -1648,6 +2126,114 @@ class CLI:
                     help="Environment variable name containing the Databricks account-level OAuth M2M client secret.",
                     rich_help_panel=PANEL_DATABRICKS,
                     hidden=PANEL_DATABRICKS not in visible_panels,
+                ),
+            ] = None,
+            # =================================================================
+            # BBOT Options
+            # =================================================================
+            bbot_source: Annotated[
+                str | None,
+                typer.Option(
+                    "--bbot-source",
+                    help="BBOT report source. Accepts a local file or directory, s3://bucket/prefix, gs://bucket/prefix, or azblob://account/container/prefix.",
+                    rich_help_panel=PANEL_BBOT,
+                    hidden=PANEL_BBOT not in visible_panels,
+                ),
+            ] = None,
+            # =================================================================
+            # Zendesk Options
+            # =================================================================
+            zendesk_subdomain: Annotated[
+                str | None,
+                typer.Option(
+                    "--zendesk-subdomain",
+                    help="Zendesk subdomain, e.g. acme for acme.zendesk.com.",
+                    rich_help_panel=PANEL_ZENDESK,
+                    hidden=PANEL_ZENDESK not in visible_panels,
+                ),
+            ] = None,
+            zendesk_oauth_token_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--zendesk-oauth-token-env-var",
+                    help="Environment variable name containing the Zendesk OAuth access token used to authenticate ingestion.",
+                    rich_help_panel=PANEL_ZENDESK,
+                    hidden=PANEL_ZENDESK not in visible_panels,
+                ),
+            ] = None,
+            # =================================================================
+            # Snowflake Options
+            # =================================================================
+            snowflake_account: Annotated[
+                str | None,
+                typer.Option(
+                    "--snowflake-account",
+                    help="Snowflake account identifier, e.g. MYORG-MYACCOUNT.",
+                    rich_help_panel=PANEL_SNOWFLAKE,
+                    hidden=PANEL_SNOWFLAKE not in visible_panels,
+                ),
+            ] = None,
+            snowflake_user: Annotated[
+                str | None,
+                typer.Option(
+                    "--snowflake-user",
+                    help="Snowflake user Cartography authenticates as.",
+                    rich_help_panel=PANEL_SNOWFLAKE,
+                    hidden=PANEL_SNOWFLAKE not in visible_panels,
+                ),
+            ] = None,
+            snowflake_pat_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--snowflake-pat-env-var",
+                    help="Environment variable name containing the Snowflake programmatic access token (PAT).",
+                    rich_help_panel=PANEL_SNOWFLAKE,
+                    hidden=PANEL_SNOWFLAKE not in visible_panels,
+                ),
+            ] = None,
+            snowflake_private_key_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--snowflake-private-key-env-var",
+                    help="Environment variable name containing the PEM-encoded RSA private key for key-pair (JWT) authentication.",
+                    rich_help_panel=PANEL_SNOWFLAKE,
+                    hidden=PANEL_SNOWFLAKE not in visible_panels,
+                ),
+            ] = None,
+            snowflake_private_key_passphrase_env_var: Annotated[
+                str | None,
+                typer.Option(
+                    "--snowflake-private-key-passphrase-env-var",
+                    help="Environment variable name containing the passphrase protecting the Snowflake private key.",
+                    rich_help_panel=PANEL_SNOWFLAKE,
+                    hidden=PANEL_SNOWFLAKE not in visible_panels,
+                ),
+            ] = None,
+            snowflake_role: Annotated[
+                str | None,
+                typer.Option(
+                    "--snowflake-role",
+                    help="Snowflake role used for SQL API statements. Should match the user's default role, which is what the object API uses.",
+                    rich_help_panel=PANEL_SNOWFLAKE,
+                    hidden=PANEL_SNOWFLAKE not in visible_panels,
+                ),
+            ] = None,
+            snowflake_warehouse: Annotated[
+                str | None,
+                typer.Option(
+                    "--snowflake-warehouse",
+                    help="Snowflake warehouse used to run SQL API statements.",
+                    rich_help_panel=PANEL_SNOWFLAKE,
+                    hidden=PANEL_SNOWFLAKE not in visible_panels,
+                ),
+            ] = None,
+            snowflake_databases: Annotated[
+                str | None,
+                typer.Option(
+                    "--snowflake-databases",
+                    help="Comma-separated list of Snowflake databases to sync. If unset, every readable database is synced.",
+                    rich_help_panel=PANEL_SNOWFLAKE,
+                    hidden=PANEL_SNOWFLAKE not in visible_panels,
                 ),
             ] = None,
             # =================================================================
@@ -1819,6 +2405,18 @@ class CLI:
                 ),
             ] = None,
             # =================================================================
+            # Zizmor Options
+            # =================================================================
+            zizmor_source: Annotated[
+                str | None,
+                typer.Option(
+                    "--zizmor-source",
+                    help="Zizmor repository mapping file source. Accepts a local file, s3://bucket/key, gs://bucket/object, or azblob://account/container/blob.",
+                    rich_help_panel=PANEL_ZIZMOR,
+                    hidden=PANEL_ZIZMOR not in visible_panels,
+                ),
+            ] = None,
+            # =================================================================
             # Ubuntu Security Options
             # =================================================================
             ubuntu_security_enabled: Annotated[
@@ -1947,8 +2545,8 @@ class CLI:
                     "--tenable-tenant-id",
                     help=(
                         "Identifier used to scope all Tenable nodes in the graph "
-                        "(the TenableTenant node id). Defaults to the hostname of "
-                        "--tenable-url when not set."
+                        "(the TenableTenant node id). When not set, defaults to "
+                        "--tenable-url with a leading http:// or https:// removed."
                     ),
                     rich_help_panel=PANEL_TENABLE,
                     hidden=PANEL_TENABLE not in visible_panels,
@@ -1985,6 +2583,107 @@ class CLI:
                     hidden=PANEL_TENABLE not in visible_panels,
                 ),
             ] = 180,
+            # =================================================================
+            # Wiz Options
+            # =================================================================
+            wiz_graphql_url: Annotated[
+                str | None,
+                typer.Option(
+                    "--wiz-graphql-url",
+                    help="Wiz GraphQL API endpoint, e.g. https://api.us17.app.wiz.io/graphql.",
+                    rich_help_panel=PANEL_WIZ,
+                    hidden=PANEL_WIZ not in visible_panels,
+                ),
+            ] = None,
+            wiz_auth_url: Annotated[
+                str,
+                typer.Option(
+                    "--wiz-auth-url",
+                    help="Wiz OAuth token endpoint.",
+                    rich_help_panel=PANEL_WIZ,
+                    hidden=PANEL_WIZ not in visible_panels,
+                ),
+            ] = "https://auth.app.wiz.io/oauth/token",
+            wiz_client_id_env_var: Annotated[
+                str,
+                typer.Option(
+                    "--wiz-client-id-env-var",
+                    help="Environment variable name containing the Wiz API client ID.",
+                    rich_help_panel=PANEL_WIZ,
+                    hidden=PANEL_WIZ not in visible_panels,
+                ),
+            ] = "WIZ_CLIENT_ID",
+            wiz_client_secret_env_var: Annotated[
+                str,
+                typer.Option(
+                    "--wiz-client-secret-env-var",
+                    help="Environment variable name containing the Wiz API client secret.",
+                    rich_help_panel=PANEL_WIZ,
+                    hidden=PANEL_WIZ not in visible_panels,
+                ),
+            ] = "WIZ_CLIENT_SECRET",
+            wiz_tenant_id: Annotated[
+                str | None,
+                typer.Option(
+                    "--wiz-tenant-id",
+                    help=(
+                        "Identifier used to scope all Wiz nodes in the graph "
+                        "(the WizTenant node id). Defaults to the hostname of --wiz-graphql-url."
+                    ),
+                    rich_help_panel=PANEL_WIZ,
+                    hidden=PANEL_WIZ not in visible_panels,
+                ),
+            ] = None,
+            wiz_project_ids: Annotated[
+                str | None,
+                typer.Option(
+                    "--wiz-project-ids",
+                    help="Comma-separated list of Wiz project IDs to import when project metadata is present.",
+                    rich_help_panel=PANEL_WIZ,
+                    hidden=PANEL_WIZ not in visible_panels,
+                ),
+            ] = None,
+            wiz_lookback_days: Annotated[
+                int | None,
+                typer.Option(
+                    "--wiz-lookback-days",
+                    help=(
+                        "Fetch only Wiz issue and finding updates from the last N days. "
+                        "When set, Wiz cleanup is skipped so older unchanged records are preserved. "
+                        "Omit for a complete sync with cleanup."
+                    ),
+                    min=1,
+                    rich_help_panel=PANEL_WIZ,
+                    hidden=PANEL_WIZ not in visible_panels,
+                ),
+            ] = None,
+            # =================================================================
+            # Orca Security Options
+            # =================================================================
+            orca_api_endpoint: Annotated[
+                str | None,
+                typer.Option(
+                    "--orca-api-endpoint",
+                    help=(
+                        "Region-specific Orca Security API origin, without the "
+                        "/api path."
+                    ),
+                    rich_help_panel=PANEL_ORCA,
+                    hidden=PANEL_ORCA not in visible_panels,
+                ),
+            ] = None,
+            orca_api_token_env_var: Annotated[
+                str,
+                typer.Option(
+                    "--orca-api-token-env-var",
+                    help=(
+                        "Environment variable name containing the Orca Security "
+                        "API token."
+                    ),
+                    rich_help_panel=PANEL_ORCA,
+                    hidden=PANEL_ORCA not in visible_panels,
+                ),
+            ] = "ORCASECURITY_API_TOKEN",
             # =================================================================
             # Keycloak Options
             # =================================================================
@@ -2509,6 +3208,22 @@ class CLI:
 
                 parse_and_validate_gcp_requested_syncs(gcp_requested_syncs)
 
+            # Validate Azure options
+            if azure_requested_syncs:
+                from cartography.intel.azure.util.common import (
+                    parse_and_validate_azure_requested_syncs,
+                )
+
+                parse_and_validate_azure_requested_syncs(azure_requested_syncs)
+
+            # Validate Microsoft options
+            if microsoft_requested_syncs:
+                from cartography.intel.microsoft.util import (
+                    parse_and_validate_microsoft_requested_syncs,
+                )
+
+                parse_and_validate_microsoft_requested_syncs(microsoft_requested_syncs)
+
             # Read Azure client secret
             azure_client_secret = None
             if azure_sp_auth and azure_client_secret_env_var:
@@ -2518,11 +3233,30 @@ class CLI:
                 )
                 azure_client_secret = os.environ.get(azure_client_secret_env_var)
 
+            azure_access_token = None
+            if azure_access_token_env_var:
+                if azure_sp_auth:
+                    raise typer.BadParameter(
+                        "--azure-access-token-env-var cannot be combined with "
+                        "--azure-sp-auth.",
+                    )
+                azure_access_token = _read_access_token_env_var(
+                    "Azure", azure_access_token_env_var
+                )
+
+            microsoft_access_token = None
+            if microsoft_access_token_env_var:
+                microsoft_access_token = _read_access_token_env_var(
+                    "Microsoft", microsoft_access_token_env_var
+                )
+                microsoft_delegated_auth = True
+
             (
                 microsoft_tenant_id,
                 microsoft_client_id,
                 microsoft_client_secret_env_var,
             ) = _resolve_microsoft_credential_options(
+                microsoft_delegated_auth=microsoft_delegated_auth,
                 microsoft_tenant_id=microsoft_tenant_id,
                 microsoft_client_id=microsoft_client_id,
                 microsoft_client_secret_env_var=microsoft_client_secret_env_var,
@@ -2554,6 +3288,21 @@ class CLI:
                     okta_api_key_env_var,
                 )
                 okta_api_key = os.environ.get(okta_api_key_env_var)
+            okta_private_key = None
+            if bool(okta_client_id) != bool(okta_private_key_env_var):
+                raise typer.BadParameter(
+                    "--okta-client-id and --okta-private-key-env-var must be set "
+                    "together.",
+                )
+            if okta_client_id and not okta_org_id:
+                raise typer.BadParameter(
+                    "--okta-client-id requires --okta-org-id.",
+                )
+            if okta_private_key_env_var:
+                okta_private_key = _read_access_token_env_var(
+                    "Okta",
+                    okta_private_key_env_var,
+                )
 
             # Read GitHub config
             github_config = None
@@ -2563,6 +3312,15 @@ class CLI:
                     github_config_env_var,
                 )
                 github_config = os.environ.get(github_config_env_var)
+
+            # Read Notion config
+            notion_config = None
+            if notion_config_env_var:
+                logger.debug(
+                    "Reading config for Notion from environment variable %s",
+                    notion_config_env_var,
+                )
+                notion_config = os.environ.get(notion_config_env_var)
 
             # Read DigitalOcean token
             digitalocean_token = None
@@ -2606,6 +3364,59 @@ class CLI:
                         "A Kandji base URI was provided but a token was not."
                     )
 
+            # Read Miradore API key
+            miradore_api_key = None
+            if miradore_site_name:
+                if miradore_api_key_env_var:
+                    logger.debug(
+                        "Reading Miradore API key from environment variable %s",
+                        miradore_api_key_env_var,
+                    )
+                    miradore_api_key = os.environ.get(miradore_api_key_env_var)
+                elif os.environ.get("MIRADORE_API_KEY"):
+                    logger.debug(
+                        "Reading Miradore API key from environment variable MIRADORE_API_KEY",
+                    )
+                    miradore_api_key = os.environ.get("MIRADORE_API_KEY")
+                else:
+                    logger.warning(
+                        "A Miradore site name was provided but an API key was not."
+                    )
+
+            huntress_api_key = None
+            if huntress_api_key_env_var:
+                logger.debug(
+                    "Reading Huntress API key from environment variable %s",
+                    huntress_api_key_env_var,
+                )
+                huntress_api_key = os.environ.get(huntress_api_key_env_var)
+            elif os.environ.get("HUNTRESS_API_KEY"):
+                logger.debug(
+                    "Reading Huntress API key from environment variable HUNTRESS_API_KEY",
+                )
+                huntress_api_key = os.environ.get("HUNTRESS_API_KEY")
+
+            huntress_api_secret = None
+            if huntress_api_secret_env_var:
+                logger.debug(
+                    "Reading Huntress API secret from environment variable %s",
+                    huntress_api_secret_env_var,
+                )
+                huntress_api_secret = os.environ.get(huntress_api_secret_env_var)
+            elif os.environ.get("HUNTRESS_API_SECRET"):
+                logger.debug(
+                    "Reading Huntress API secret from environment variable HUNTRESS_API_SECRET",
+                )
+                huntress_api_secret = os.environ.get("HUNTRESS_API_SECRET")
+
+            # Both halves of the basic auth pair are needed. Warn when only one turned up,
+            # otherwise the module would silently skip itself and look like a no-op.
+            if bool(huntress_api_key) != bool(huntress_api_secret):
+                logger.warning(
+                    "A Huntress API key or secret was provided but not both; "
+                    "the Huntress module will be skipped.",
+                )
+
             if statsd_enabled:
                 logger.debug(
                     "statsd enabled. Sending metrics to server %s:%d. Metrics have prefix '%s'.",
@@ -2622,6 +3433,14 @@ class CLI:
                     pagerduty_api_key_env_var,
                 )
                 pagerduty_api_key = os.environ.get(pagerduty_api_key_env_var)
+
+            opsgenie_api_key = None
+            if opsgenie_api_key_env_var:
+                logger.debug(
+                    "Reading API key for Opsgenie from environment variable %s",
+                    opsgenie_api_key_env_var,
+                )
+                opsgenie_api_key = os.environ.get(opsgenie_api_key_env_var)
 
             # Read CrowdStrike credentials
             crowdstrike_client_id = None
@@ -2959,6 +3778,15 @@ class CLI:
                 databricks_client_secret = os.environ.get(
                     databricks_client_secret_env_var,
                 )
+            databricks_azure_client_secret = None
+            if databricks_azure_client_secret_env_var:
+                logger.debug(
+                    "Reading Databricks Entra ID client secret from environment variable %s",
+                    databricks_azure_client_secret_env_var,
+                )
+                databricks_azure_client_secret = os.environ.get(
+                    databricks_azure_client_secret_env_var,
+                )
             databricks_account_client_secret = None
             if databricks_account_client_secret_env_var:
                 # Read the secret whenever the env-var flag is set, even if
@@ -2971,6 +3799,44 @@ class CLI:
                 )
                 databricks_account_client_secret = os.environ.get(
                     databricks_account_client_secret_env_var,
+                )
+
+            resolved_bbot_source = _resolve_report_source_option(
+                module="bbot",
+                source=bbot_source,
+                local_path=None,
+                s3_bucket=None,
+                s3_prefix=None,
+            )
+            zendesk_oauth_token = None
+            if zendesk_oauth_token_env_var:
+                zendesk_oauth_token = os.environ.get(zendesk_oauth_token_env_var)
+            snowflake_pat = None
+            if snowflake_pat_env_var:
+                logger.debug(
+                    "Reading Snowflake programmatic access token from environment variable %s",
+                    snowflake_pat_env_var,
+                )
+                snowflake_pat = os.environ.get(snowflake_pat_env_var)
+            snowflake_private_key = None
+            if snowflake_private_key_env_var:
+                # Read the key whenever the env-var flag is set, even if the
+                # passphrase is missing, so the module entry's credential guard
+                # sees the asymmetric configuration and fails loudly instead of
+                # silently skipping ingestion.
+                logger.debug(
+                    "Reading Snowflake private key from environment variable %s",
+                    snowflake_private_key_env_var,
+                )
+                snowflake_private_key = os.environ.get(snowflake_private_key_env_var)
+            snowflake_private_key_passphrase = None
+            if snowflake_private_key_passphrase_env_var:
+                logger.debug(
+                    "Reading Snowflake private key passphrase from environment variable %s",
+                    snowflake_private_key_passphrase_env_var,
+                )
+                snowflake_private_key_passphrase = os.environ.get(
+                    snowflake_private_key_passphrase_env_var,
                 )
 
             resolved_docker_scout_source = _resolve_report_source_option(
@@ -3002,6 +3868,8 @@ class CLI:
                 s3_prefix=aibom_s3_prefix,
             )
 
+            if resolved_bbot_source:
+                logger.debug("BBOT source: %s", resolved_bbot_source)
             if resolved_docker_scout_source:
                 logger.debug("Docker Scout source: %s", resolved_docker_scout_source)
             if resolved_trivy_source:
@@ -3010,7 +3878,6 @@ class CLI:
                 logger.debug("Syft source: %s", resolved_syft_source)
             if resolved_aibom_source:
                 logger.debug("AIBOM source: %s", resolved_aibom_source)
-
             # Read Scaleway secret key
             scaleway_secret_key = None
             if scaleway_secret_key_env_var:
@@ -3065,6 +3932,43 @@ class CLI:
                     tenable_secret_key_env_var,
                 )
                 tenable_secret_key = os.environ.get(tenable_secret_key_env_var)
+
+            # Read Wiz API credentials
+            wiz_client_id = None
+            if wiz_client_id_env_var:
+                logger.debug(
+                    "Reading Wiz client ID from environment variable %s",
+                    wiz_client_id_env_var,
+                )
+                wiz_client_id = os.environ.get(wiz_client_id_env_var)
+            wiz_client_secret = None
+            if wiz_client_secret_env_var:
+                logger.debug(
+                    "Reading Wiz client secret from environment variable %s",
+                    wiz_client_secret_env_var,
+                )
+                wiz_client_secret = os.environ.get(wiz_client_secret_env_var)
+
+            wiz_project_ids_list = None
+            if wiz_project_ids:
+                wiz_project_ids_list = [
+                    project_id.strip()
+                    for project_id in wiz_project_ids.split(",")
+                    if project_id.strip()
+                ]
+                logger.debug(
+                    "Parsed %d Wiz project IDs to sync",
+                    len(wiz_project_ids_list),
+                )
+
+            # Read Orca Security API token
+            orca_api_token = None
+            if orca_api_token_env_var:
+                logger.debug(
+                    "Reading Orca Security API token from environment variable %s",
+                    orca_api_token_env_var,
+                )
+                orca_api_token = os.environ.get(orca_api_token_env_var)
 
             # Read Keycloak client secret
             keycloak_client_secret = None
@@ -3146,6 +4050,11 @@ class CLI:
                 )
                 workos_api_key = os.environ.get(workos_apikey_env_var)
 
+            if gke_endpoint not in ("dns", "private", "public"):
+                raise typer.BadParameter(
+                    "--gke-endpoint must be one of: dns, private, public."
+                )
+
             # Build the Config object
             config = Config(
                 neo4j_uri=neo4j_uri,
@@ -3169,39 +4078,73 @@ class CLI:
                 azure_tenant_id=azure_tenant_id,
                 azure_client_id=azure_client_id,
                 azure_client_secret=azure_client_secret,
+                azure_access_token=azure_access_token,
                 azure_subscription_id=azure_subscription_id,
+                azure_requested_syncs=azure_requested_syncs,
                 microsoft_tenant_id=microsoft_tenant_id,
                 microsoft_client_id=microsoft_client_id,
                 microsoft_client_secret=microsoft_client_secret,
+                microsoft_delegated_auth=microsoft_delegated_auth,
+                microsoft_requested_syncs=microsoft_requested_syncs,
+                microsoft_access_token=microsoft_access_token,
                 aws_requested_syncs=aws_requested_syncs,
                 aws_guardduty_severity_threshold=aws_guardduty_severity_threshold,
                 analysis_job_directory=analysis_job_directory,
                 oci_sync_all_profiles=oci_sync_all_profiles,
                 okta_org_id=okta_org_id,
                 okta_api_key=okta_api_key,
+                okta_client_id=okta_client_id,
+                okta_private_key=okta_private_key,
+                okta_private_key_id=okta_private_key_id,
+                okta_scopes=okta_scopes,
+                okta_dpop_enabled=not okta_disable_dpop,
                 okta_base_domain=okta_base_domain,
                 okta_saml_role_regex=okta_saml_role_regex,
                 github_config=github_config,
                 github_commit_lookback_days=github_commit_lookback_days,
+                notion_config=notion_config,
                 digitalocean_token=digitalocean_token,
                 permission_relationships_file=permission_relationships_file,
                 azure_permission_relationships_file=azure_permission_relationships_file,
                 gcp_requested_syncs=gcp_requested_syncs,
                 gcp_permission_relationships_file=gcp_permission_relationships_file,
+                gcp_excluded_org_ids=(
+                    [x.strip() for x in gcp_excluded_org_ids.split(",") if x.strip()]
+                    if gcp_excluded_org_ids
+                    else None
+                ),
+                gcp_excluded_folder_ids=(
+                    [x.strip() for x in gcp_excluded_folder_ids.split(",") if x.strip()]
+                    if gcp_excluded_folder_ids
+                    else None
+                ),
+                gcp_exclude_org_root_projects=gcp_exclude_org_root_projects,
                 jamf_base_uri=jamf_base_uri,
                 jamf_user=jamf_user,
                 jamf_password=jamf_password,
                 kandji_base_uri=kandji_base_uri,
                 kandji_tenant_id=kandji_tenant_id,
                 kandji_token=kandji_token,
+                miradore_base_uri=miradore_base_uri,
+                miradore_site_name=miradore_site_name,
+                miradore_api_key=miradore_api_key,
+                huntress_base_uri=huntress_base_uri,
+                huntress_api_key=huntress_api_key,
+                huntress_api_secret=huntress_api_secret,
                 k8s_kubeconfig=k8s_kubeconfig,
                 managed_kubernetes=managed_kubernetes,
+                gke_clusters=gke_clusters,
+                gke_endpoint=gke_endpoint,
+                gke_impersonate_service_account=gke_impersonate_service_account,
                 statsd_enabled=statsd_enabled,
                 statsd_prefix=statsd_prefix,
                 statsd_host=statsd_host,
                 statsd_port=statsd_port,
                 pagerduty_api_key=pagerduty_api_key,
                 pagerduty_request_timeout=pagerduty_request_timeout,
+                opsgenie_api_key=opsgenie_api_key,
+                opsgenie_api_url=opsgenie_api_url,
+                opsgenie_request_timeout=opsgenie_request_timeout,
                 nist_cve_url=nist_cve_url,
                 cve_enabled=cve_enabled,
                 cve_api_key=cve_api_key,
@@ -3214,9 +4157,23 @@ class CLI:
                 gsuite_config=gsuite_config,
                 googleworkspace_auth_method=googleworkspace_auth_method,
                 googleworkspace_config=googleworkspace_config,
+                zoom_sections=zoom_sections,
+                zoom_lookback_days=zoom_lookback_days,
+                zoom_request_limit=zoom_request_limit,
+                zoom_account_id=zoom_account_id,
+                zoom_client_id=zoom_client_id,
+                zoom_client_secret=(
+                    os.environ.get(zoom_client_secret_env_var)
+                    if zoom_client_secret_env_var
+                    else None
+                ),
                 jumpcloud_api_key=jumpcloud_api_key,
                 jumpcloud_org_id=jumpcloud_org_id,
                 socketdev_token=socketdev_token,
+                jira_cloud_id=jira_cloud_id,
+                jira_email=jira_email,
+                jira_api_token=os.environ.get(jira_api_token_env_var),
+                jira_site_url=jira_site_url,
                 lastpass_cid=lastpass_cid,
                 lastpass_provhash=lastpass_provhash,
                 bigfix_username=bigfix_username,
@@ -3283,6 +4240,20 @@ class CLI:
                 databricks_account_host=databricks_account_host,
                 databricks_account_client_id=databricks_account_client_id,
                 databricks_account_client_secret=databricks_account_client_secret,
+                databricks_azure_tenant_id=databricks_azure_tenant_id,
+                databricks_azure_client_id=databricks_azure_client_id,
+                databricks_azure_client_secret=databricks_azure_client_secret,
+                bbot_source=bbot_source,
+                zendesk_subdomain=zendesk_subdomain,
+                zendesk_oauth_token=zendesk_oauth_token,
+                snowflake_account=snowflake_account,
+                snowflake_user=snowflake_user,
+                snowflake_pat=snowflake_pat,
+                snowflake_private_key=snowflake_private_key,
+                snowflake_private_key_passphrase=snowflake_private_key_passphrase,
+                snowflake_role=snowflake_role,
+                snowflake_warehouse=snowflake_warehouse,
+                snowflake_databases=snowflake_databases,
                 # Forward the user-provided values (not resolved). Config calls
                 # resolve_report_source_with_legacy_fields() internally; the CLI's
                 # _resolve_report_source_option above runs the same logic for early
@@ -3304,6 +4275,7 @@ class CLI:
                 aibom_results_dir=aibom_results_dir,
                 aibom_s3_bucket=aibom_s3_bucket,
                 aibom_s3_prefix=aibom_s3_prefix,
+                zizmor_source=zizmor_source,
                 ontology_users_source=ontology_users_source,
                 ontology_devices_source=ontology_devices_source,
                 scaleway_access_key=scaleway_access_key,
@@ -3318,6 +4290,15 @@ class CLI:
                 tenable_access_key=tenable_access_key,
                 tenable_secret_key=tenable_secret_key,
                 tenable_findings_lookback_days=tenable_findings_lookback_days,
+                wiz_graphql_url=wiz_graphql_url,
+                wiz_auth_url=wiz_auth_url,
+                wiz_client_id=wiz_client_id,
+                wiz_client_secret=wiz_client_secret,
+                wiz_tenant_id=wiz_tenant_id,
+                wiz_project_ids=wiz_project_ids_list,
+                wiz_lookback_days=wiz_lookback_days,
+                orca_api_endpoint=orca_api_endpoint,
+                orca_api_token=orca_api_token,
                 spacelift_api_endpoint=spacelift_api_endpoint_resolved,
                 spacelift_api_token=spacelift_api_token,
                 spacelift_api_key_id=spacelift_api_key_id,

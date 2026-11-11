@@ -1,12 +1,12 @@
 # Okta
 
 The Okta module ingests organizations, users, groups, applications, trusted
-origins, administration roles, and user authentication factors.
-
-Okta nodes use legacy Cypher-based ingestion rather than formal
-`CartographyNodeSchema` models. Schema introspection APIs may therefore return
-empty results for Okta nodes. The [Okta schema](schema.md) documents the
-available properties and relationships.
+origins, user and group administration roles, user authentication factors,
+devices, network zones, API token metadata, System Log streams, and policies
+(global session, password, authentication, authenticator enrollment, and
+profile enrollment) with their rules.
+See the generated [Okta schema](schema.md) for the available properties and
+relationships.
 
 (cross-platform-integration-okta-to-aws)=
 ## Cross-Platform Integration: Okta to AWS

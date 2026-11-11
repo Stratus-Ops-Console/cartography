@@ -2,7 +2,6 @@ import configparser
 import hashlib
 import json
 import logging
-import time
 from collections import defaultdict
 from collections import namedtuple
 from collections.abc import Callable
@@ -33,11 +32,13 @@ from cartography.intel.github.lockfiles import parse_uv_lock
 from cartography.intel.github.util import call_github_rest_api
 from cartography.intel.github.util import fetch_all
 from cartography.intel.github.util import fetch_all_rest_api_pages
+from cartography.intel.github.util import fetch_all_rest_api_pages_or_none
 from cartography.intel.github.util import fetch_page
 from cartography.intel.github.util import get_file_content
 from cartography.intel.github.util import handle_rate_limit_sleep
 from cartography.intel.github.util import PaginatedGraphqlData
 from cartography.intel.github.util import rest_api_base_url
+from cartography.intel.github.util import sleep_with_jitter
 from cartography.intel.trivy.util import make_normalized_package_id
 from cartography.intel.trivy.util import normalize_package_name
 from cartography.intel.trivy.util import parse_purl
@@ -81,6 +82,9 @@ class GitHubRepoSyncResult:
     repos: list[dict[str, Any]]
     manifests: list[dict[str, Any]]
     manifests_cleanup_safe: bool
+    repos_complete: bool
+    """False when GitHub omitted repositories from the listing (null entries), so
+    syncs that enumerate per-repository resources must not clean up by organization."""
 
 
 GITHUB_ORG_REPOS_PAGINATED_GRAPHQL = """
@@ -117,6 +121,7 @@ GITHUB_ORG_REPOS_PAGINATED_GRAPHQL = """
                       id
                     }
                     isPrivate
+                    visibility
                     isArchived
                     isDisabled
                     isLocked
@@ -265,6 +270,48 @@ GITHUB_REPO_DEP_MANIFESTS_PAGINATED_GRAPHQL = """
     """
 
 
+# GitHub computes the dependency graph lazily, so the first request for a given
+# manifest position often times out while priming the resolver and the retry then
+# hits a warm result. Retrying that case straight away instead of paying the
+# transport-level backoff saves minutes of pure sleep across a large org.
+_MANIFEST_RESOLVER_RETRY_DELAYS = (0.0, 1.0)
+
+
+class DependencyGraphForbiddenError(Exception):
+    """
+    Raised when GitHub refuses the dependency graph outright, e.g. when the org has
+    an IP allow list that does not cover this sync's source address. This is
+    permanent for the run, so callers must not retry it.
+    """
+
+
+def _is_org_wide_forbidden(message: str) -> bool:
+    """
+    Return True if a FORBIDDEN message is the org-wide IP allow list refusal, which
+    every other repo in the org would hit identically.
+
+    Any other FORBIDDEN is repo-scoped: the dependency graph is enabled per
+    repository (see
+    https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-graph)
+    and token permissions can differ per repo, so it must not stop the batch. GitHub
+    does not document the refusal wording, so a miss here only means we keep walking
+    the batch, which is the safe behavior anyway.
+    """
+    return "ip allow list" in message.lower()
+
+
+def _get_forbidden_error_message(errors: list[Any]) -> str | None:
+    """
+    Return the message of the first FORBIDDEN error in `errors`, or None if there
+    is none.
+    """
+    for error in errors:
+        if isinstance(error, dict) and error.get("type") == "FORBIDDEN":
+            message = error.get("message")
+            return message if isinstance(message, str) else "FORBIDDEN"
+    return None
+
+
 def _fetch_manifest_page(
     token: str,
     api_url: str,
@@ -279,10 +326,12 @@ def _fetch_manifest_page(
     Retries on both HTTP errors and GraphQL-level timeouts (where GitHub returns
     HTTP 200 but with errors and null data in the response body).
     Returns the raw response dict, or None if all retries failed.
+    :raises DependencyGraphForbiddenError: if GitHub refuses the dependency graph,
+        which no amount of retrying can fix.
     """
     for attempt in range(retries):
         try:
-            handle_rate_limit_sleep(token)
+            handle_rate_limit_sleep(token, api_url)
             resp = fetch_page(
                 token,
                 api_url,
@@ -300,7 +349,7 @@ def _fetch_manifest_page(
         ):
             if attempt + 1 >= retries:
                 return None
-            time.sleep(2 ** (attempt + 1))
+            sleep_with_jitter(2 ** (attempt + 1))
             continue
 
         # Check for GraphQL-level timeout: HTTP 200 but dependencyGraphManifests is null
@@ -308,7 +357,13 @@ def _fetch_manifest_page(
         dep_manifests = (
             repository.get("dependencyGraphManifests") if repository else None
         )
-        if dep_manifests is None and resp.get("errors"):
+        errors = resp.get("errors") or []
+        if dep_manifests is None and errors:
+            forbidden_message = _get_forbidden_error_message(errors)
+            if forbidden_message:
+                # Permanent for this run; retrying only burns wall time and would
+                # report itself as a timeout, which it is not.
+                raise DependencyGraphForbiddenError(forbidden_message)
             if attempt + 1 >= retries:
                 logger.warning(
                     "GraphQL timeout fetching dependency manifests for repo %s after %d retries.",
@@ -322,7 +377,11 @@ def _fetch_manifest_page(
                 attempt + 1,
                 retries,
             )
-            time.sleep(2 ** (attempt + 1))
+            sleep_with_jitter(
+                _MANIFEST_RESOLVER_RETRY_DELAYS[
+                    min(attempt, len(_MANIFEST_RESOLVER_RETRY_DELAYS) - 1)
+                ],
+            )
             continue
 
         return resp
@@ -386,6 +445,19 @@ def _get_repo_dep_manifests(
                 len(manifests),
             )
             return manifests, False
+
+        # GitHub can return a usable page alongside errors, e.g. a FORBIDDEN or a
+        # timeout on a nested field, which yields a manifest whose dependencies are
+        # silently missing. Keep what we got, but never let cleanup delete the rest.
+        if resp.get("errors"):
+            cleanup_safe = False
+            logger.warning(
+                "GitHub returned errors alongside a usable dependency manifest page "
+                "for repo %s; the page may be incomplete, so manifest cleanup is "
+                "disabled for this repo. Errors: %s",
+                repo,
+                resp["errors"],
+            )
 
         manifest_page_info = dep_manifests.get("pageInfo", {})
         manifest_cursor = manifest_page_info.get("endCursor")
@@ -453,6 +525,17 @@ def _get_repo_dep_manifests(
                 )
                 break
 
+            if dep_resp.get("errors"):
+                cleanup_safe = False
+                logger.warning(
+                    "GitHub returned errors alongside a usable dependency page for %s "
+                    "in repo %s; the page may be incomplete, so manifest cleanup is "
+                    "disabled for this repo. Errors: %s",
+                    blob_path,
+                    repo,
+                    dep_resp["errors"],
+                )
+
             dep_nodes_list = dep_dep_manifests.get("nodes") or []
             if not dep_nodes_list:
                 break
@@ -511,9 +594,13 @@ def _get_dep_manifests_for_repos(
     )
     result: dict[str, dict[str, Any]] = {}
     failed_count = 0
+    forbidden_count = 0
+    forbidden_message: str | None = None
+    org_wide_forbidden = False
+    not_attempted_count = 0
     cleanup_safe = True
 
-    for repo in repo_raw_data:
+    for index, repo in enumerate(repo_raw_data):
         if repo is None:
             continue
         repo_name = repo.get("name")
@@ -536,6 +623,16 @@ def _get_dep_manifests_for_repos(
                     len(manifests),
                     repo_name,
                 )
+        except DependencyGraphForbiddenError as err:
+            forbidden_count += 1
+            forbidden_message = str(err)
+            cleanup_safe = False
+            if _is_org_wide_forbidden(forbidden_message):
+                # Every remaining repo would spend a GraphQL request only to be
+                # refused too, so stop and report what we did not attempt.
+                org_wide_forbidden = True
+                not_attempted_count = len(repo_raw_data) - index - 1
+                break
         except requests.exceptions.RequestException:
             failed_count += 1
             cleanup_safe = False
@@ -545,6 +642,26 @@ def _get_dep_manifests_for_repos(
                 exc_info=True,
             )
 
+    if org_wide_forbidden:
+        logger.warning(
+            "GitHub refused the dependency graph for org %s with an org-wide IP allow "
+            "list error: %s. No retry can succeed, so the remaining %d of %d repos in "
+            "this batch were not attempted.",
+            org,
+            forbidden_message,
+            not_attempted_count,
+            len(repo_raw_data),
+        )
+    elif forbidden_count > 0:
+        logger.warning(
+            "GitHub refused the dependency graph for %d of %d repos in org %s; the "
+            "dependency graph is enabled per repository and token permissions can "
+            "differ per repo, so the other repos were still synced. Last message: %s",
+            forbidden_count,
+            len(repo_raw_data),
+            org,
+            forbidden_message,
+        )
     if failed_count > 0:
         logger.warning(
             "Skipped dependency manifests for %d of %d repos in org %s due to fetch errors.",
@@ -1002,6 +1119,58 @@ def _merge_repos_with_privileged_details(
     return merged_repos, merged_repo_count, repos_missing_privileged_details
 
 
+# `security_and_analysis` features whose `status` becomes a boolean
+# `<feature>_enabled` property on the repository.
+_SECURITY_FEATURES = (
+    "advanced_security",
+    "code_security",
+    "secret_scanning",
+    "secret_scanning_push_protection",
+    "secret_scanning_non_provider_patterns",
+    "secret_scanning_validity_checks",
+    "dependabot_security_updates",
+)
+
+
+@timeit
+def get_repo_security_and_analysis_by_url(
+    token: str,
+    api_url: str,
+    organization: str,
+) -> dict[str, dict[str, Any]]:
+    """
+    Return each repository's `security_and_analysis` settings keyed by repository URL.
+
+    GitHub's GraphQL API does not expose these settings, so they come from the
+    REST repository list. GitHub includes them only for repositories where the
+    credential has admin or security manager access; other repositories are
+    omitted and their settings stay unknown. A denied listing returns an empty
+    mapping; other failures propagate.
+    """
+    repos = fetch_all_rest_api_pages_or_none(
+        token,
+        rest_api_base_url(api_url),
+        f"/orgs/{quote(organization, safe='')}/repos",
+        "",
+        "repository security settings",
+        unavailable=(403, 404),
+        params={"per_page": 100, "type": "all"},
+    )
+    return {
+        repo["html_url"]: repo["security_and_analysis"]
+        for repo in repos or []
+        if repo.get("html_url") and repo.get("security_and_analysis")
+    }
+
+
+def _security_feature_enabled(
+    security_and_analysis: dict[str, Any] | None,
+    feature: str,
+) -> bool | None:
+    status = ((security_and_analysis or {}).get(feature) or {}).get("status")
+    return {"enabled": True, "disabled": False}.get(str(status))
+
+
 def transform(
     repos_json: List[Optional[Dict]],
     direct_collaborators: dict[str, List[UserAffiliationAndRepoPermission]],
@@ -1185,6 +1354,8 @@ def _transform_repo_objects(input_repo_object: Dict, out_repo_list: List[Dict]) 
     # fork whose upstream has been deleted, so we read `isFork` for the boolean rather than
     # inferring it from the parent's presence.
     parent = input_repo_object.get("parent")
+    # Merged in from the REST API by sync(); absent when not visible to the credential.
+    security_and_analysis = input_repo_object.get("securityAndAnalysis")
 
     out_repo_list.append(
         {
@@ -1207,6 +1378,17 @@ def _transform_repo_objects(input_repo_object: Dict, out_repo_list: List[Dict]) 
             "locked": input_repo_object["isLocked"],
             "fork": input_repo_object.get("isFork", False),
             "parent": parent["url"] if parent else None,
+            "visibility": (
+                visibility.lower()
+                if (visibility := input_repo_object.get("visibility"))
+                else None
+            ),
+            **{
+                f"{feature}_enabled": _security_feature_enabled(
+                    security_and_analysis, feature
+                )
+                for feature in _SECURITY_FEATURES
+            },
             "giturl": git_url,
             "url": input_repo_object["url"],
             "sshurl": ssh_url,
@@ -2626,6 +2808,15 @@ def sync(
         if repo is not None and repo.get("url") in dep_manifests_by_url:
             repo["dependencyGraphManifests"] = dep_manifests_by_url[repo["url"]]
 
+    security_and_analysis_by_url = get_repo_security_and_analysis_by_url(
+        github_api_key,
+        github_url,
+        organization,
+    )
+    for repo in repos_json:
+        if repo is not None and repo.get("url") in security_and_analysis_by_url:
+            repo["securityAndAnalysis"] = security_and_analysis_by_url[repo["url"]]
+
     repo_data = transform(repos_json, direct_collabs, outside_collabs)
     enrich_dependencies_with_lockfile_versions(
         repo_data["dependencies"],
@@ -2681,4 +2872,5 @@ def sync(
         repos=repo_data["repos"],
         manifests=repo_data["manifests"],
         manifests_cleanup_safe=dep_manifests_cleanup_safe,
+        repos_complete=all(repo is not None for repo in repos_json),
     )

@@ -192,6 +192,58 @@ def test_permission_evaluation_relationships_render_permissions_without_source()
     assert "Evaluated permissions: `S3:GetObject`" in generated
 
 
+def test_azure_data_permissions_render_separately_from_permissions():
+    # Arrange
+    definition = PermissionRelationshipDefinition(
+        provider="azure",
+        source_label="EntraUser",
+        target_label="AzureStorageAccount",
+        relationship_name="CAN_READ",
+        permissions=("Microsoft.Storage/storageAccounts/listKeys/action",),
+        config_path="cartography/data/azure_permission_relationships.yaml",
+        data_permissions=(
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+        ),
+    )
+    node = Node(
+        label="AzureStorageAccount",
+        descriptions=(),
+        extra_labels=(),
+        conditional_labels=(),
+        properties=(),
+        modules=("azure",),
+        schemas=(),
+    )
+    relationship = Relationship(
+        source_label="EntraUser",
+        label="CAN_READ",
+        target_label="AzureStorageAccount",
+        direction=LinkDirection.OUTWARD,
+        descriptions=("Allows an Entra user to read data in a storage account.",),
+        properties=(),
+        modules=("azure",),
+        origins=("permission_evaluation",),
+        schemas=(),
+        analysis_jobs=(),
+        permission_relationships=(definition,),
+    )
+    model = DataModel(
+        nodes=(node,),
+        relationships=(relationship,),
+        permission_relationships=(definition,),
+    )
+
+    # Act
+    generated = render_module_schema(model, "azure")
+
+    # Assert
+    assert (
+        "Evaluated permissions: `Microsoft.Storage/storageAccounts/listKeys/action`; "
+        "data plane only: "
+        "`Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read`"
+    ) in generated
+
+
 def test_ontology_and_cross_module_relationships_are_duplicated_in_module_docs():
     # Arrange
     node = Node(
@@ -247,7 +299,9 @@ def test_ontology_and_cross_module_relationships_are_duplicated_in_module_docs()
     generated = render_module_schema(model, "lastpass")
 
     # Assert
-    assert "(:User)-[:HAS_ACCOUNT]->(:UserAccount)" in generated
+    # Inherited ontology edges keep the far endpoint semantic when possible, but
+    # rewrite the near endpoint to the concrete node being documented.
+    assert "(:User)-[:HAS_ACCOUNT]->(:LastpassUser)" in generated
     assert "(:Human)-[:IDENTITY_LASTPASS]->(:LastpassUser)" in generated
 
 
@@ -402,6 +456,22 @@ def test_mermaid_diagram_only_covers_intra_module_edges():
         assert all(endpoint in module_labels for endpoint in endpoints), line
 
 
+def test_okta_aws_matchlink_renders_in_both_module_schemas():
+    # Arrange
+    model = inspect_data_model()
+
+    for module in ("okta", "aws"):
+        # Act
+        generated = render_module_schema(model, module)
+        mermaid = generated.split("graph LR", 1)[1].split("```", 1)[0]
+
+        # Assert
+        assert "(:OktaGroup)-[:HAS_ROLE]->(:AWSRole)" in generated
+        assert "(:OktaGroup)-[:ALLOWED_BY]->(:AWSRole)" in generated
+        assert "OktaGroup -- HAS_ROLE --> AWSRole" not in mermaid
+        assert "OktaGroup -- ALLOWED_BY --> AWSRole" not in mermaid
+
+
 def test_relationship_property_tables_hide_internal_fields():
     # Arrange
     model = inspect_data_model(gitlab_models)
@@ -435,3 +505,30 @@ def test_each_relationship_is_documented_once_per_node_section():
     assert (
         section.count("(:GitLabProject)-[:HAS_ENVIRONMENT]->(:GitLabEnvironment)") == 1
     )
+
+
+def test_concrete_nodes_render_inherited_ontology_relationships():
+    model = inspect_data_model()
+
+    for module, label in (
+        ("aws", "AWSECSContainer"),
+        ("kubernetes", "KubernetesContainer"),
+        ("railway", "RailwayDeployment"),
+    ):
+        generated = render_module_schema(model, module)
+        section = generated.split(f"### {label}", 1)[1].split("\n### ", 1)[0]
+
+        assert f"`(:{label})-[:RESOLVED_IMAGE]->(:Image)`" in section
+        assert "`(:Container)-[:RESOLVED_IMAGE]->(:Image)`" not in section
+        # Validation-only Container→FilesystemSnapshot must not appear; a
+        # provider-native SCANNED_AS to a concrete snapshot label is fine.
+        assert f"`(:{label})-[:SCANNED_AS]->(:FilesystemSnapshot)`" not in section
+
+
+def test_ontology_schema_documents_constraint_vs_expected_edges():
+    model = inspect_data_model()
+
+    generated = render_module_schema(model, "ontology")
+
+    assert "not inherited onto concrete node schemas" in generated
+    assert "Expected (materialized) ontology edges" in generated

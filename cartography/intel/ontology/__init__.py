@@ -8,6 +8,8 @@ import cartography.intel.ontology.packages
 import cartography.intel.ontology.publicips
 import cartography.intel.ontology.users
 from cartography.analysis.aibom.analysis import AIBOM_RUNS_ON_CONTAINER
+from cartography.analysis.ontology.analysis import BBOT_IP_MATCHES_PUBLIC_IP
+from cartography.analysis.ontology.analysis import CODEBUILD_IMAGE_PACKAGED_FROM
 from cartography.analysis.ontology.analysis import RESOLVED_IMAGE_JOBS
 from cartography.analysis.ontology.analysis import TAILSCALE_DEVICE_INSTANCE_LINKING
 from cartography.analysis.ontology.analysis import WORKLOAD_HAS_RUNTIME_IMAGE
@@ -81,10 +83,23 @@ def run(neo4j_session: neo4j.Session, config: Config) -> None:
         config.update_tag,
         common_job_parameters,
     )
+    run_typed_analysis_job(
+        BBOT_IP_MATCHES_PUBLIC_IP,
+        neo4j_session,
+        common_job_parameters,
+    )
     # Link Tailscale endpoint devices to the cloud compute instances they identify as.
     # Runs after provider syncs so EC2/GCP ComputeInstance nodes are available.
     run_typed_analysis_job(
         TAILSCALE_DEVICE_INSTANCE_LINKING,
+        neo4j_session,
+        common_job_parameters,
+    )
+    # Derive Image PACKAGED_FROM code repository from CodeBuild PACKAGED_BY edges.
+    # Runs after the GitHub, GitLab and CircleCI supply-chain syncs so their stronger
+    # matches take precedence.
+    run_typed_analysis_job(
+        CODEBUILD_IMAGE_PACKAGED_FROM,
         neo4j_session,
         common_job_parameters,
     )

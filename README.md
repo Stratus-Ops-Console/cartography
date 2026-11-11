@@ -1,4 +1,8 @@
-![Cartography](docs/root/images/logo-horizontal.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/root/images/logo-horizontal-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/root/images/logo-horizontal.svg">
+  <img alt="Cartography" src="docs/root/images/logo-horizontal.svg">
+</picture>
 
 <div align="center">
 
@@ -29,6 +33,8 @@ Cartography is a Python tool that pulls infrastructure assets and their relation
 ```bash
 pip install cartography
 ```
+
+Install `cartography[neo4j-rust]` instead to swap in Neo4j's Rust Bolt codec, which cuts sync time by roughly 20-30%. See [Faster Neo4j driver](https://docs.cartography.dev/ops.html#faster-neo4j-driver).
 
 ### Start Neo4j database
 
@@ -97,33 +103,38 @@ password options in [the rules docs](https://docs.cartography.dev/usage/rules.ht
 - [Crowdstrike Falcon](https://docs.cartography.dev/modules/crowdstrike/index.html) - Hosts, Spotlight vulnerabilities, CVEs
 - [DigitalOcean](https://docs.cartography.dev/modules/digitalocean/index.html)
 - [Duo](https://docs.cartography.dev/modules/duo/index.html) - Users, Groups, Endpoints
-- [GitHub](https://docs.cartography.dev/modules/github/index.html) - repos, branches, users, teams, dependency graph manifests, dependencies
-- [Google Cloud Platform](https://docs.cartography.dev/modules/gcp/index.html) - Artifact Registry, Bigtable, Cloud Functions, Cloud Resource Manager, Cloud Run, Cloud SQL, Compute, DNS, IAM, KMS, Secret Manager, Storage, Google Kubernetes Engine, Vertex AI
+- [GitHub](https://docs.cartography.dev/modules/github/index.html) - repos, branches, users, teams, dependency graph manifests, dependencies, organization and repository security settings, verified domains, installed GitHub Apps, webhooks
+- [Google Cloud Platform](https://docs.cartography.dev/modules/gcp/index.html) - Artifact Registry, Bigtable, Cloud Functions, Cloud Resource Manager, Cloud Run, Cloud SQL, Compute including SSL policies and target proxies, DNS, IAM, KMS, Secret Manager, Storage, Google Kubernetes Engine, Vertex AI
 - [Google Workspace](https://docs.cartography.dev/modules/googleworkspace/index.html) - users, groups, devices, OAuth apps
+- [Huntress](https://docs.cartography.dev/modules/huntress/index.html) - accounts, organizations, agents, incident reports, console users and roles
+- [Jira Cloud](https://docs.cartography.dev/modules/jira/index.html) - users, groups, project roles, permission grants, and API-reported admin groups
 - [Jumpcloud](https://docs.cartography.dev/modules/jumpcloud/index.html)
 - [Kandji](https://docs.cartography.dev/modules/kandji/index.html) - Devices
 - [Keycloak](https://docs.cartography.dev/modules/keycloak/index.html) - Realms, Users, Groups, Roles, Scopes, Clients, IdentityProviders, Authentication Flows, Authentication Executions, Organizations, Organization Domains
 - [Kubernetes](https://docs.cartography.dev/modules/kubernetes/index.html) - Cluster, Namespace, Service, Pod, Container, ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding, OIDCProvider
 - [Lastpass](https://docs.cartography.dev/modules/lastpass/index.html) - users
 - [Microsoft Azure](https://docs.cartography.dev/modules/azure/index.html) - App Service, Container Instance, CosmosDB, Data Factory, Event Grid, Firewall, Firewall Policy, Functions, Key Vault, Azure Kubernetes Service (AKS), Load Balancer, Logic Apps, Management Groups, Resource Group, SQL, Storage, Virtual Machine, Virtual Networks
-- [Microsoft Entra ID](https://docs.cartography.dev/modules/entra/index.html) -  Users, Groups, Applications, OUs, App Roles, federation to AWS Identity Center, Intune Managed Devices, Intune Detected Apps, Intune Compliance Policies
+- [Microsoft](https://docs.cartography.dev/modules/microsoft/index.html) - Entra ID users, groups, applications and roles; Intune devices and policies; Office 365 licenses; Defender for Endpoint machines and unresolved alerts
 - [CVE Metadata](https://docs.cartography.dev/modules/cve_metadata/index.html) - CVE enrichment with CVSS, EPSS scores, and CISA KEV data from NVD and FIRST.org
 - [NIST CVE](https://docs.cartography.dev/modules/cve/index.html) - Common Vulnerabilities and Exposures (CVE) data from NIST database (deprecated - use CVE Metadata instead)
 - [Netlify](https://docs.cartography.dev/modules/netlify/index.html) - Accounts, Users, Invites, Sites, Deploys, Functions, Dev Servers, Agent Runners, Database Branches, Database Snapshots, Environment Variables, Build Hooks, Notification Hooks, Deploy Keys, Snippets, Service Instances, DNS Zones, DNS Records, Certificates, Forms
 - [Okta](https://docs.cartography.dev/modules/okta/index.html) - users, groups, organizations, roles, applications, factors, trusted origins, reply URIs, federation to AWS roles, federation to AWS Identity Center
 - [OpenAI](https://docs.cartography.dev/modules/openai/index.html) - Organization, AdminApiKey, User, Project, ServiceAccount, ApiKey
 - [Oracle Cloud Infrastructure](https://docs.cartography.dev/modules/oci/index.html) - IAM
+- [Orca Security](https://docs.cartography.dev/modules/orca/index.html) - Organizations, security alerts, per-target CVE findings
 - [PagerDuty](https://docs.cartography.dev/modules/pagerduty/index.html) - Users, teams, services, schedules, escalation policies, integrations, vendors
 - [Railway](https://docs.cartography.dev/modules/railway/index.html) - Workspaces, Projects, Environments, Services, Service Instances, Deployments, Domains, TCP Proxies, Volumes, Variables, Tokens
 - [Scaleway](https://docs.cartography.dev/modules/scaleway/index.html) - Projects, IAM, Local Storage, Instances
 - [SentinelOne](https://docs.cartography.dev/modules/sentinelone/index.html) - Accounts, Agents, Applications, Application Versions, CVEs
 - [Slack](https://docs.cartography.dev/modules/slack/index.html) - Teams, Users, UserGroups, Channels
 - [SnipeIT](https://docs.cartography.dev/modules/snipeit/index.html) - Users, Assets
+- [Snowflake](https://docs.cartography.dev/modules/snowflake/index.html) - Accounts, Users, Service Users, Roles, Database Roles, Grants, Role Hierarchy, Ownership, Programmatic Access Tokens, Credentials, Warehouses, Compute Pools, Resource Monitors, Databases, Schemas, Tables, Views, Iceberg Tables, Dynamic Tables, Streams, Tasks, Pipes, Stages, External Volumes, Secrets, Network Policies, Network Rules, Policies, Integrations (Security, Storage, API, Catalog, Notification, External Access), Services, Image Repositories, Notebooks, Streamlits, Shares, Listings, Replication Groups
 - [Socket.dev](https://docs.cartography.dev/modules/socketdev/index.html) - Organizations, Repositories, Dependencies, Security Alerts (CVE, malware, supply chain risks), Fixes
 - [Spacelift](https://docs.cartography.dev/modules/spacelift/index.html) - Accounts, Spaces,Users, Stacks, WorkerPools, Workers, Runs, GitCommits
 - [SubImage](https://docs.cartography.dev/modules/subimage/index.html) - Tenant, TeamMember, APIKey, Neo4jUser, Module, Framework
 - [Tailscale](https://docs.cartography.dev/modules/tailscale/index.html) - Tailnet, Users, Devices, Groups, Tags, PostureIntegrations, DevicePostures, DevicePostureConditions, device posture compliance relationships
 - [Trivy Scanner](https://docs.cartography.dev/modules/trivy/index.html) - AWS ECR Images
+- [Zoom](https://docs.cartography.dev/modules/zoom/index.html) - Accounts, users, plan types, groups, roles, security settings, Marketplace apps, meetings, recordings, and client versions
 
 </details>
 
@@ -142,7 +153,9 @@ All contributors and participants must follow the [CNCF Code of Conduct](https:/
 
 Submit a GitHub issue to report a bug or request a new feature. Larger discussions happen in [GitHub Discussions](https://github.com/cartography-cncf/cartography/discussions).
 
-Get started with our [developer documentation](https://docs.cartography.dev/dev/developer-guide.html).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the issue workflow, development
+setup, tests, DCO sign-off requirement, and pull request expectations. You do
+not need an issue assignment or maintainer permission before starting work.
 
 
 ## Who uses Cartography?
@@ -154,6 +167,7 @@ Get started with our [developer documentation](https://docs.cartography.dev/dev/
 1. [Corelight](https://www.corelight.com/)
 1. [SubImage](https://subimage.io)
 1. [Superhuman](https://superhuman.com/)
+1. [Hadrian](https://www.hadrian.co/)
 1. {Your company here} :-)
 
 If your organization uses Cartography, please file a PR and update this list. Say hi on Slack too!

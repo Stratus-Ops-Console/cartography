@@ -351,8 +351,9 @@ class GraphJob:
             parameters (Dict[str, Any]): Parameters for the cleanup queries.
                 Must include all parameters required by the generated queries.
                 Common parameters include UPDATE_TAG and sub-resource identifiers.
-            iterationsize (int, optional): The number of items to process in each iteration.
-                Defaults to 10000, matching Neo4j's recommendation for large deletes.
+            iterationsize (int, optional): The number of items each cleanup transaction commits.
+                Defaults to 10000, matching Neo4j's recommendation for large deletes. A single scan
+                deletes up to ``SCAN_BATCHES_PER_RUN`` times this many before it runs again.
             cascade_delete (bool): If True, also delete all child nodes that have a
                 relationship to stale nodes matching node_schema.sub_resource_relationship.rel_label.
                 Defaults to False to preserve existing behavior.
@@ -368,8 +369,9 @@ class GraphJob:
 
         expected_param_keys: Set[str] = get_parameters(queries)
         actual_param_keys: Set[str] = set(parameters.keys())
-        # Hacky, but LIMIT_SIZE is specified by default in cartography.graph.statement, so we exclude it from validation
-        actual_param_keys.add("LIMIT_SIZE")
+        # Hacky, but LIMIT_SIZE and SCAN_LIMIT_SIZE are specified by default in cartography.graph.statement, so we
+        # exclude them from validation
+        actual_param_keys.update({"LIMIT_SIZE", "SCAN_LIMIT_SIZE"})
 
         missing_params: Set[str] = expected_param_keys - actual_param_keys
 
@@ -383,8 +385,8 @@ class GraphJob:
             GraphStatement(
                 query,
                 parameters=parameters,
-                iterative=True,
                 iterationsize=iterationsize,
+                batched_transactions=True,
                 parent_job_name=node_schema.label,
                 parent_job_sequence_num=idx,
             )
@@ -431,8 +433,9 @@ class GraphJob:
             - Required relationship properties ``_sub_resource_label`` and ``_sub_resource_id``
               must be defined in the rel_schema.
             - For a given rel_schema, the fields used in the rel_schema.properties._sub_resource_label.name and
-            rel_schema.properties._sub_resource_id.name must be provided as keys and values in the params dict.
+              rel_schema.properties._sub_resource_id.name must be provided as keys and values in the params dict.
             - The rel_schema must have a source_node_matcher and target_node_matcher.
+
         """
         cleanup_link_query = build_cleanup_query_for_matchlink(rel_schema)
         logger.debug("Cleanup query: %s", cleanup_link_query)

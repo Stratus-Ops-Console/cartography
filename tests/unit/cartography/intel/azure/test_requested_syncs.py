@@ -19,6 +19,8 @@ SUBSCRIPTION_SYNCS = {
     "functions": ["functions.sync"],
     "event_grid": ["event_grid.sync"],
     "logic_apps": ["logic_apps.sync"],
+    "ai_foundry": ["ai_foundry.sync"],
+    "container_apps": ["container_apps.sync"],
     "rbac": ["rbac.sync"],
     "workload_identity": ["workload_identity.sync"],
     "sql": ["sql.sync"],
